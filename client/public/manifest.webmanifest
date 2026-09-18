@@ -1,0 +1,9 @@
+{
+  "name": "Tickekette",
+  "short_name": "Tickekette",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f3ee",
+  "theme_color": "#9a3412",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

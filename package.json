@@ -1,0 +1,16 @@
+{
+  "name": "tickekette",
+  "private": true,
+  "description": "Billetterie multi-collectifs : vente sans survente, liste d'attente, contrôle hors ligne.",
+  "workspaces": ["server", "client"],
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c magenta,cyan \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w client",
+    "start": "npm start -w server",
+    "seed": "npm run seed -w server",
+    "test": "npm test -w server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0"
+  }
+}
