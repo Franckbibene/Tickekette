@@ -6,14 +6,7 @@ import { cityOf, escapeHtml as e, formatDateTime, formatMoney } from '../format.
 // Les mails sont écrits dans la boîte d'envoi (table emails) dans la même transaction
 // que l'action qui les déclenche : pas de mail « billet » si le paiement est annulé.
 export function sendMail({ to, subject, html, kind }) {
-  run(
-    'INSERT INTO emails (to_email, subject, html, kind, created_at) VALUES (?, ?, ?, ?, ?)',
-    to,
-    subject,
-    html,
-    kind,
-    clock.nowIso(),
-  );
+  run('INSERT INTO emails (to_email, subject, html, kind, created_at) VALUES (?, ?, ?, ?, ?)', to, subject, html, kind, clock.nowIso());
 }
 
 const L = (locale, fr, en) => (locale === 'en' ? en : fr);
@@ -64,9 +57,7 @@ export function mailTickets(order, event, tickets) {
   const access = event.is_online
     ? `<p>${L(l, 'Lien d’accès à l’événement', 'Event access link')} : <a href="${e(event.online_url)}">${e(event.online_url)}</a></p>`
     : `<p>${L(l, 'Présentez le QR code de chaque billet à l’entrée (sur téléphone ou imprimé).', 'Show each ticket’s QR code at the entrance (on your phone or printed).')}</p>`;
-  const list = tickets
-    .map((t) => `<li>${e(t.ticket_type_name)} — ${L(l, 'code', 'code')} <code>${e(t.code)}</code></li>`)
-    .join('');
+  const list = tickets.map((t) => `<li>${e(t.ticket_type_name)} — ${L(l, 'code', 'code')} <code>${e(t.code)}</code></li>`).join('');
   sendMail({
     to: order.buyer_email,
     kind: 'tickets',
@@ -117,7 +108,11 @@ export function mailRefund(order, event, reason, amountCents) {
   sendMail({
     to: order.buyer_email,
     kind: 'refund',
-    subject: L(l, `Remboursement de ${formatMoney(amountCents, l)} — ${order.reference}`, `Refund of ${formatMoney(amountCents, l)} — ${order.reference}`),
+    subject: L(
+      l,
+      `Remboursement de ${formatMoney(amountCents, l)} — ${order.reference}`,
+      `Refund of ${formatMoney(amountCents, l)} — ${order.reference}`,
+    ),
     html: layout(l, `<p>${L(l, 'Bonjour', 'Hello')} ${e(order.buyer_name)},</p>${eventBlock(event, l)}<p>${L(l, fr, en)}</p><p>${how}</p>`),
   });
 }

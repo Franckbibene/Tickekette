@@ -1,9 +1,23 @@
 import { DatabaseSync } from 'node:sqlite';
-import { SCHEMA } from './schema.js';
+import { INDEXES, MIGRATIONS, SCHEMA } from './schema.js';
+
+// Accès à la base : uniquement des requêtes préparées avec paramètres liés.
+// Aucune valeur venant de l'utilisateur n'est concaténée dans le SQL.
 
 let db = null;
 const statements = new Map();
+// Seule interpolation de la base : noms de table/colonne constants de MIGRATIONS (jamais de saisie).
 let depth = 0;
+
+function migrate() {
+  for (const { table, column, definition } of MIGRATIONS) {
+    const exists = db
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .some((c) => c.name === column);
+    if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
 
 export function initDb(file) {
   if (db) db.close();
@@ -13,6 +27,8 @@ export function initDb(file) {
   db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   if (file !== ':memory:') db.exec('PRAGMA journal_mode = WAL;');
   db.exec(SCHEMA);
+  migrate();
+  db.exec(INDEXES);
   return db;
 }
 

@@ -1,6 +1,10 @@
 import { all, get, run, tx } from '../db.js';
 import { clock } from '../clock.js';
+import { conflict } from '../errors.js';
 import { parseScannedText } from './tickets.js';
+
+const MAX_CLOCK_SKEW_MS = 60_000;
+const MAX_OFFLINE_AGE_MS = 24 * 3_600_000;
 
 const ticketByCode = (code) =>
   get(
@@ -11,11 +15,12 @@ const ticketByCode = (code) =>
     code,
   );
 
+// Horodatage du téléphone : accepté s'il est plausible (ni futur, ni vieux de plus de 24 h).
 function normalizeScanTime(value) {
   const t = Date.parse(value);
   const now = clock.now().getTime();
-  // Horodatage du téléphone : accepté s'il est plausible (ni futur, ni vieux de plus de 24 h).
-  return Number.isFinite(t) && t <= now + 60_000 && t >= now - 86_400_000 ? new Date(t).toISOString() : clock.nowIso();
+  const plausible = Number.isFinite(t) && t <= now + MAX_CLOCK_SKEW_MS && t >= now - MAX_OFFLINE_AGE_MS;
+  return plausible ? new Date(t).toISOString() : clock.nowIso();
 }
 
 // Enregistre un passage à l'entrée. Rejouable : un même clientScanId renvoie le même résultat
@@ -23,10 +28,14 @@ function normalizeScanTime(value) {
 // Règle (5.7) : le premier scan enregistré par le serveur fait foi, les suivants sont des doublons.
 // Deux téléphones hors ligne peuvent tous deux laisser entrer le même billet : le conflit
 // est alors détecté à la synchronisation et remonté comme alerte dans le tableau de bord.
-export function recordScan({ eventId, text, deviceId, gate = '', clientScanId, scannedAt, offline = false, userId }) {
+export function recordScan({ eventId, text, deviceId, gate = '', clientScanId, scannedAt, offline = false, userId = null }) {
   return tx(() => {
     const previous = get('SELECT * FROM scans WHERE client_scan_id = ?', clientScanId);
-    if (previous) return describeScan(previous);
+    if (previous) {
+      // Un identifiant de scan ne peut pas servir à lire le scan d'un autre événement.
+      if (previous.event_id !== eventId) throw conflict('scan_id_conflict', 'Identifiant de scan déjà utilisé.');
+      return describeScan(previous);
+    }
 
     const { code, forged } = parseScannedText(text);
     const ticket = code && !forged ? ticketByCode(code) : null;
@@ -45,8 +54,9 @@ export function recordScan({ eventId, text, deviceId, gate = '', clientScanId, s
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       clientScanId,
       eventId,
-      ticket?.id ?? null,
-      code ?? String(text ?? '').slice(0, 64),
+      // Un billet d'un autre événement n'est pas rattaché au scan (pas de lien entre collectifs).
+      ticket && ticket.event_id === eventId ? ticket.id : null,
+      (code ?? String(text ?? '')).slice(0, 64),
       deviceId,
       gate,
       userId ?? null,
@@ -59,20 +69,25 @@ export function recordScan({ eventId, text, deviceId, gate = '', clientScanId, s
   });
 }
 
+// Les informations du billet ne sont renvoyées que pour un billet de cet événement :
+// un contrôleur ne peut pas découvrir le nom du porteur d'un billet d'un autre collectif.
 function describeScan(scan) {
   const ticket = scan.ticket_id ? ticketByCode(scan.code) : null;
+  const sameEvent = ticket && ticket.event_id === scan.event_id;
   return {
     clientScanId: scan.client_scan_id,
     result: scan.result,
     scannedAt: scan.scanned_at,
-    ticket: ticket && {
-      code: ticket.code,
-      holderName: ticket.holder_name,
-      ticketTypeId: ticket.ticket_type_id,
-      ticketTypeName: ticket.ticket_type_name,
-      reference: ticket.reference,
-    },
-    firstEntry: ticket?.entered_at ? { at: ticket.entered_at, gate: ticket.entered_gate } : null,
+    ticket: sameEvent
+      ? {
+          code: ticket.code,
+          holderName: ticket.holder_name,
+          ticketTypeId: ticket.ticket_type_id,
+          ticketTypeName: ticket.ticket_type_name,
+          reference: ticket.reference,
+        }
+      : null,
+    firstEntry: sameEvent && ticket.entered_at ? { at: ticket.entered_at, gate: ticket.entered_gate } : null,
   };
 }
 

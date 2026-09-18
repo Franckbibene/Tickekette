@@ -4,6 +4,7 @@
 // - UNIQUE (provider, provider_payment_id)  -> un paiement = une seule commande (5.3)
 // - webhook_events.id PRIMARY KEY            -> une notification traitée une seule fois (5.3)
 // - scans.client_scan_id UNIQUE              -> synchronisation hors ligne rejouable (5.7)
+// - orders.idempotency_key UNIQUE            -> un double clic ne crée pas deux commandes (5.2)
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS collectives (
   id          INTEGER PRIMARY KEY,
@@ -94,6 +95,7 @@ CREATE TABLE IF NOT EXISTS orders (
   closed_at          TEXT,
   refund_reason      TEXT,
   waitlist_entry_id  INTEGER REFERENCES waitlist_entries(id),
+  idempotency_key    TEXT,
   created_at         TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_orders_pending ON orders(status, expires_at);
@@ -180,3 +182,11 @@ CREATE TABLE IF NOT EXISTS emails (
   created_at  TEXT NOT NULL
 );
 `;
+
+// Index créés après les migrations (ils dépendent de colonnes ajoutées en cours de projet).
+export const INDEXES = `
+CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_idempotency ON orders(idempotency_key) WHERE idempotency_key IS NOT NULL;
+`;
+
+// Colonnes ajoutées après la première version : appliquées aux bases existantes.
+export const MIGRATIONS = [{ table: 'orders', column: 'idempotency_key', definition: 'TEXT' }];

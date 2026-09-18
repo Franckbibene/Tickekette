@@ -4,8 +4,7 @@ import { config } from '../config.js';
 // 96 bits aléatoires : impossible à deviner.
 export const newTicketCode = () => crypto.randomBytes(12).toString('base64url');
 
-const signature = (code) =>
-  crypto.createHmac('sha256', config.ticketSecret).update(code).digest('base64url').slice(0, 12);
+const signature = (code) => crypto.createHmac('sha256', config.ticketSecret).update(code).digest('base64url').slice(0, 12);
 
 // Contenu du QR code : le code est signé, une capture retouchée est rejetée (5.6).
 export const qrPayload = (code) => `TKK1.${code}.${signature(code)}`;

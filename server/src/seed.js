@@ -4,12 +4,31 @@ import { config } from './config.js';
 import { clock } from './clock.js';
 import { all, get, initDb, run, tx } from './db.js';
 import { hashPassword } from './auth.js';
-import { createOrder, joinWaitlist, recordPayment } from './services/sales.js';
+import { createOrder } from './services/orders.js';
+import { recordPayment } from './services/payments.js';
+import { joinWaitlist } from './services/waitlist.js';
 import { recordScan } from './services/scans.js';
 
 export const DEMO_PASSWORD = 'demo1234';
 
-const FIRST = ['Camille', 'Léa', 'Hugo', 'Inès', 'Lucas', 'Manon', 'Nathan', 'Chloé', 'Yanis', 'Sarah', 'Théo', 'Jade', 'Rayan', 'Louise', 'Malik', 'Zoé'];
+const FIRST = [
+  'Camille',
+  'Léa',
+  'Hugo',
+  'Inès',
+  'Lucas',
+  'Manon',
+  'Nathan',
+  'Chloé',
+  'Yanis',
+  'Sarah',
+  'Théo',
+  'Jade',
+  'Rayan',
+  'Louise',
+  'Malik',
+  'Zoé',
+];
 const LAST = ['Martin', 'Bernard', 'Dubois', 'Garcia', 'Nguyen', 'Diallo', 'Moreau', 'Laurent', 'Lefèvre', 'Roux', 'Fournier', 'Benali'];
 
 function dayAt(days, utcHour, utcMinute = 0) {
@@ -80,11 +99,20 @@ function buyer() {
   const first = FIRST[buyerIndex % FIRST.length];
   const last = LAST[Math.floor(buyerIndex / FIRST.length) % LAST.length];
   buyerIndex++;
-  return { buyerName: `${first} ${last}`, buyerEmail: `${first}.${last}.${buyerIndex}@exemple.test`.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '') };
+  return {
+    buyerName: `${first} ${last}`,
+    buyerEmail: `${first}.${last}.${buyerIndex}@exemple.test`
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, ''),
+  };
 }
 
+const reserve = (eventId, ticketTypeId, quantity, method) =>
+  createOrder(eventId, { ...buyer(), paymentMethod: method, items: [{ ticketTypeId, quantity }] }).order;
+
 function sell(eventId, ticketTypeId, quantity, method = 'card') {
-  const order = createOrder(eventId, { ...buyer(), paymentMethod: method, items: [{ ticketTypeId, quantity }] });
+  const order = reserve(eventId, ticketTypeId, quantity, method);
   recordPayment(order.id, {
     provider: method === 'card' ? 'mockpay' : 'transfer',
     providerPaymentId: `seed_${order.reference}`,
@@ -128,8 +156,8 @@ export function seedDemo() {
     );
     for (let i = 0; i < 18; i++) sell(rocher.id, rocher.types[0].id, 1 + (i % 4));
     for (let i = 0; i < 9; i++) sell(rocher.id, rocher.types[1].id, 2);
-    createOrder(rocher.id, { ...buyer(), paymentMethod: 'transfer', items: [{ ticketTypeId: rocher.types[1].id, quantity: 2 }] });
-    createOrder(rocher.id, { ...buyer(), paymentMethod: 'transfer', items: [{ ticketTypeId: rocher.types[0].id, quantity: 4 }] });
+    reserve(rocher.id, rocher.types[1].id, 2, 'transfer');
+    reserve(rocher.id, rocher.types[0].id, 4, 'transfer');
 
     const darwin = insertEvent(
       nuits,
@@ -169,7 +197,14 @@ export function seedDemo() {
     // Quelques personnes sont déjà entrées.
     for (const order of tonightOrders.slice(0, 4)) {
       for (const t of all('SELECT code FROM tickets WHERE order_id = ?', order.id)) {
-        recordScan({ eventId: tonight.id, text: t.code, deviceId: 'seed', gate: 'Entrée principale', clientScanId: `seed-${t.code}`, scannedAt: clock.nowIso() });
+        recordScan({
+          eventId: tonight.id,
+          text: t.code,
+          deviceId: 'seed',
+          gate: 'Entrée principale',
+          clientScanId: `seed-${t.code}`,
+          scannedAt: clock.nowIso(),
+        });
       }
     }
 
@@ -228,12 +263,13 @@ export function seedDemo() {
   });
 }
 
-// `npm run seed` : repart d'une base neuve.
+// `npm run seed` : repart d'une base neuve (comptes de démo : interdit en production).
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (config.isProduction) throw new Error('Le jeu de données de démonstration ne peut pas être chargé en production.');
   fs.mkdirSync(config.dataDir, { recursive: true });
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(config.dbFile + suffix, { force: true });
   initDb(config.dbFile);
   seedDemo();
   const { n } = get('SELECT COUNT(*) AS n FROM tickets');
-  console.log(`Base de démonstration créée (${n} billets). Mot de passe des comptes : ${DEMO_PASSWORD}`);
+  console.info(`Base de démonstration créée (${n} billets). Mot de passe des comptes de démo : voir README.`);
 }

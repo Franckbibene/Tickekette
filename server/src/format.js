@@ -28,5 +28,5 @@ export function toCsv(rows, columns) {
   };
   const lines = [columns.map((c) => cell(c.label)).join(';')];
   for (const row of rows) lines.push(columns.map((c) => cell(c.value(row))).join(';'));
-  return `﻿${lines.join('\r\n')}\r\n`;
+  return `\uFEFF${lines.join('\r\n')}\r\n`;
 }

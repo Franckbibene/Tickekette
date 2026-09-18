@@ -1,0 +1,17 @@
+{
+  // Vérification de types du serveur JavaScript (sans compilation) : détecte les appels
+  // incorrects aux API Node/Express et les propriétés inexistantes.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["src", "test"]
+}

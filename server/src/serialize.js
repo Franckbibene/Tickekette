@@ -1,6 +1,6 @@
 import { all, get } from './db.js';
 import { clock } from './clock.js';
-import { cancelDeadline, orderItemsOf, pricing, ticketTypesOf, transferAllowed } from './services/sales.js';
+import { cancelDeadline, orderItemsOf, pricing, ticketTypesOf, transferAllowed } from './services/inventory.js';
 import { qrPayload } from './services/tickets.js';
 
 export function publicEvent(event) {
@@ -23,10 +23,7 @@ export function publicEvent(event) {
 
 export function publicTicketType(tt) {
   const p = pricing(tt);
-  const { waiting } = get(
-    "SELECT COUNT(*) AS waiting FROM waitlist_entries WHERE ticket_type_id = ? AND status = 'waiting'",
-    tt.id,
-  );
+  const { waiting } = get("SELECT COUNT(*) AS waiting FROM waitlist_entries WHERE ticket_type_id = ? AND status = 'waiting'", tt.id);
   return {
     id: tt.id,
     name: tt.name,
@@ -70,8 +67,7 @@ export function publicOrder(order) {
     : [];
   const deadline = cancelDeadline(event);
   const canCancel =
-    order.status === 'pending' ||
-    (isPaid && event.status !== 'cancelled' && clock.now() <= deadline && tickets.every((t) => !t.enteredAt));
+    order.status === 'pending' || (isPaid && event.status !== 'cancelled' && clock.now() <= deadline && tickets.every((t) => !t.enteredAt));
   return {
     token: order.token,
     reference: order.reference,
@@ -92,10 +88,7 @@ export function publicOrder(order) {
     })),
     event: { ...publicEvent(event), onlineUrl: isPaid && event.is_online ? event.online_url : null },
     tickets,
-    bank:
-      order.payment_method === 'transfer' && order.status === 'pending'
-        ? { iban: collective.iban, reference: order.reference }
-        : null,
+    bank: order.payment_method === 'transfer' && order.status === 'pending' ? { iban: collective.iban, reference: order.reference } : null,
     canCancel,
     cancelDeadline: deadline.toISOString(),
     serverNow: clock.nowIso(),

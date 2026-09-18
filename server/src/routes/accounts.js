@@ -1,23 +1,39 @@
 import { Router } from 'express';
 import { all, get, run, tx } from '../db.js';
 import { clock } from '../clock.js';
-import { checkPassword, hashPassword, publicUser, requireAuth, signToken } from '../auth.js';
-import { HttpError, badRequest, conflict } from '../errors.js';
+import { closeSession, hashPassword, openSession, publicUser, requireAuth, verifyCredentials } from '../auth.js';
+import { HttpError, conflict } from '../errors.js';
+import { LIMITS, email, password, slug, text } from '../validation.js';
 
-export const authRouter = Router();
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const DEFAULT_COLOR = '#9a3412';
+const IBAN_MAX = 42;
 
-authRouter.post('/login', (req, res) => {
-  const email = String(req.body?.email ?? '').trim().toLowerCase();
-  const user = get('SELECT * FROM users WHERE email = ?', email);
-  if (!user || !checkPassword(String(req.body?.password ?? ''), user.password_hash)) {
-    throw new HttpError(401, 'bad_credentials', 'E-mail ou mot de passe incorrect.');
-  }
-  res.json({ token: signToken(user), user: publicUser(user) });
-});
+export function authRouter(limits) {
+  const router = Router();
 
-authRouter.get('/me', requireAuth(), (req, res) => {
-  res.json(publicUser(req.user));
-});
+  router.post('/login', limits.login, (req, res) => {
+    // Pas de validation détaillée ici : le message reste identique quelle que soit l'erreur,
+    // pour ne pas indiquer si un compte existe.
+    const address = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase().slice(0, LIMITS.email) : '';
+    const secret = typeof req.body?.password === 'string' ? req.body.password.slice(0, 200) : '';
+    const user = address && secret ? verifyCredentials(address, secret) : null;
+    if (!user) throw new HttpError(401, 'bad_credentials', 'E-mail ou mot de passe incorrect.');
+    openSession(res, user);
+    res.json(publicUser(user));
+  });
+
+  router.post('/logout', (_req, res) => {
+    closeSession(res);
+    res.status(204).end();
+  });
+
+  router.get('/me', requireAuth(), (req, res) => {
+    res.json(publicUser(req.user));
+  });
+
+  return router;
+}
 
 // Super-administration de la plateforme (3.4 / 4.4).
 // (H2) Le super-admin gère les collectifs et leurs comptes, mais n'a accès à aucun chiffre de vente.
@@ -37,36 +53,34 @@ platformRouter.get('/collectives', (_req, res) => {
 
 platformRouter.post('/collectives', (req, res) => {
   const b = req.body ?? {};
-  const name = String(b.name ?? '').trim();
-  const slug = String(b.slug ?? '').trim().toLowerCase();
-  const color = /^#[0-9a-fA-F]{6}$/.test(b.color ?? '') ? b.color : '#9a3412';
-  const iban = String(b.iban ?? '').trim();
-  const adminName = String(b.adminName ?? '').trim();
-  const adminEmail = String(b.adminEmail ?? '').trim().toLowerCase();
-  const adminPassword = String(b.adminPassword ?? '');
-  if (!name) throw badRequest('invalid_name', 'Nom du collectif obligatoire.');
-  if (!/^[a-z0-9-]{2,40}$/.test(slug)) throw badRequest('invalid_slug', 'Identifiant : lettres minuscules, chiffres et tirets.');
-  if (!adminName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail)) throw badRequest('invalid_admin', 'Nom et e-mail de l’admin obligatoires.');
-  if (adminPassword.length < 8) throw badRequest('weak_password', 'Mot de passe : 8 caractères minimum.');
-  if (get('SELECT id FROM collectives WHERE slug = ?', slug)) throw conflict('slug_taken', 'Identifiant déjà utilisé.');
-  if (get('SELECT id FROM users WHERE email = ?', adminEmail)) throw conflict('email_taken', 'Cet e-mail est déjà utilisé.');
+  const input = {
+    name: text(b.name, { field: 'Nom du collectif', max: LIMITS.name }),
+    slug: slug(b.slug),
+    color: typeof b.color === 'string' && HEX_COLOR_RE.test(b.color) ? b.color : DEFAULT_COLOR,
+    iban: text(b.iban, { field: 'IBAN', max: IBAN_MAX, required: false }),
+    adminName: text(b.adminName, { field: 'Nom de l’admin', max: LIMITS.name }),
+    adminEmail: email(b.adminEmail, 'E-mail de l’admin'),
+    adminPassword: password(b.adminPassword),
+  };
+  if (get('SELECT id FROM collectives WHERE slug = ?', input.slug)) throw conflict('slug_taken', 'Identifiant déjà utilisé.');
+  if (get('SELECT id FROM users WHERE email = ?', input.adminEmail)) throw conflict('email_taken', 'Cet e-mail est déjà utilisé.');
   const id = tx(() => {
     const now = clock.nowIso();
     const { lastInsertRowid } = run(
       'INSERT INTO collectives (name, slug, color, iban, created_at) VALUES (?, ?, ?, ?, ?)',
-      name,
-      slug,
-      color,
-      iban,
+      input.name,
+      input.slug,
+      input.color,
+      input.iban,
       now,
     );
     const collectiveId = Number(lastInsertRowid);
     run(
       "INSERT INTO users (collective_id, email, password_hash, name, role, created_at) VALUES (?, ?, ?, ?, 'admin', ?)",
       collectiveId,
-      adminEmail,
-      hashPassword(adminPassword),
-      adminName,
+      input.adminEmail,
+      hashPassword(input.adminPassword),
+      input.adminName,
       now,
     );
     return collectiveId;

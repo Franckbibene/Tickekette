@@ -1,4 +1,14 @@
 node_modules
 client/dist
+coverage
+
+# Base de données locale (contient des données personnelles de démo)
 server/data/*.db*
+
+# Variables d'environnement : secrets, jamais commités
+.env
+.env.*
+!.env.example
+
 .DS_Store
+*.log
