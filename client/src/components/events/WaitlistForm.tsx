@@ -27,9 +27,9 @@ export function WaitlistForm({ event, ticketType, onClose }: Props) {
       locale: lang,
     }),
   );
-  const [position, setPosition] = useState<number | null>(null);
+  const [done, setDone] = useState(false);
 
-  if (position !== null) return <div className="alert alert-success">{t('waitlist.done', { n: position })}</div>;
+  if (done) return <div className="alert alert-success">{t('waitlist.done')}</div>;
 
   async function submit(e: SubmitEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -37,7 +37,7 @@ export function WaitlistForm({ event, ticketType, onClose }: Props) {
     setErrors(next);
     if (hasErrors(next)) return;
     const result = await join.run();
-    if (result) setPosition(result.position);
+    if (result) setDone(true);
   }
 
   return (

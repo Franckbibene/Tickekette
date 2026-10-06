@@ -149,8 +149,14 @@ describe('5.4 — liste d’attente', () => {
         method: 'POST',
         body: { ticketTypeId: typeIds[0], name: email, email, quantity: 1 },
       });
-    assert.equal((await join('premier@exemple.test')).body.position, 1);
-    assert.equal((await join('second@exemple.test')).body.position, 2);
+    assert.equal((await join('premier@exemple.test')).status, 201);
+    assert.equal((await join('second@exemple.test')).status, 201);
+    // L'ordre d'inscription fait foi. La position n'est pas renvoyée par l'API : elle révélerait
+    // si une adresse était déjà inscrite (voir security.test.js).
+    assert.deepEqual(
+      all('SELECT email FROM waitlist_entries WHERE ticket_type_id = ? ORDER BY id', typeIds[0]).map((w) => w.email),
+      ['premier@exemple.test', 'second@exemple.test'],
+    );
 
     await client.request(`/api/orders/${first.body.token}/cancel`, { method: 'POST' });
     // La place ne revient pas en vente publique : elle est réservée au premier inscrit.

@@ -16,8 +16,10 @@ export const eventsApi = {
       body: order,
       headers: { 'Idempotency-Key': idempotencyKey },
     }).then((r) => expectObject(r, ['token'])),
+  // La position n'est pas renvoyée ici : elle part par mail, pour que la réponse ne révèle pas
+  // si l'adresse était déjà inscrite (voir services/waitlist.js côté serveur).
   joinWaitlist: (eventId: number, entry: WaitlistRequest) =>
-    request<{ position: number }>(`/events/${eventId}/waitlist`, { method: 'POST', body: entry }).then((r) =>
-      expectObject(r, ['position']),
+    request<{ registered: boolean }>(`/events/${eventId}/waitlist`, { method: 'POST', body: entry }).then((r) =>
+      expectObject(r, ['registered']),
     ),
 };

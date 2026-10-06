@@ -62,7 +62,12 @@ export function joinWaitlist(eventId, input) {
       tt.id,
       address,
     );
-    if (existing) throw conflict('already_registered', 'Cette adresse est déjà sur la liste d’attente.');
+    // Réponse identique que l'adresse soit déjà inscrite ou non : sinon n'importe qui pourrait
+    // vérifier, sans compte, si une personne donnée suit cet événement. La position ne peut pas
+    // être renvoyée non plus, car le nombre de personnes en attente est public : une position
+    // inférieure à ce compteur trahirait une inscription préexistante. Elle part donc par mail,
+    // que seule la titulaire de l'adresse reçoit.
+    if (existing) return { registered: true };
     const { lastInsertRowid } = run(
       `INSERT INTO waitlist_entries (event_id, ticket_type_id, name, email, quantity, locale, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -81,6 +86,6 @@ export function joinWaitlist(eventId, input) {
       entry.id,
     );
     mailWaitlistJoined(entry, event, tt.name, position);
-    return { position };
+    return { registered: true };
   });
 }

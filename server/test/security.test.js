@@ -341,6 +341,30 @@ describe('Contrôle d’accès', () => {
   });
 });
 
+describe('Énumération', () => {
+  test('liste d’attente : même réponse pour une adresse déjà inscrite ou inconnue', async () => {
+    const { cid } = makeCollective('a');
+    // Quota nul : l’événement est complet, donc la liste d’attente est ouverte.
+    const { eventId, typeIds } = makeEvent(cid, [0]);
+    const client = anonymous();
+    const join = (email) =>
+      client.request(`/api/events/${eventId}/waitlist`, {
+        method: 'POST',
+        body: { ticketTypeId: typeIds[0], name: 'Quelqu’un', email, quantity: 1 },
+      });
+    await join('cible@exemple.test');
+    const known = await join('cible@exemple.test');
+    const unknown = await join('inconnu@exemple.test');
+    assert.equal(known.status, unknown.status);
+    assert.deepEqual(known.body, unknown.body);
+    // Pas de position dans la réponse : le nombre de personnes en attente est public, une
+    // position inférieure à ce compteur trahirait une inscription préexistante.
+    assert.equal(known.body.position, undefined);
+    // Le doublon n’a pas créé de seconde inscription.
+    assert.equal(get('SELECT COUNT(*) AS n FROM waitlist_entries').n, 2);
+  });
+});
+
 describe('Mails', () => {
   test('titre d’événement avec retour à la ligne : aucun en-tête injecté dans le sujet', async () => {
     const { email } = makeCollective('a');
