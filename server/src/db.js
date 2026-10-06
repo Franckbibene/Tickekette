@@ -49,11 +49,6 @@ function migrateEmailBodies() {
     if (isEncryptedData(row.html)) decryptData(row.html);
     else update.run(encryptData(row.html), row.id);
   }
-  // Une mauvaise clé doit empêcher le démarrage, pas rendre la MFA inutilisable
-  // silencieusement au prochain login.
-  for (const row of db.prepare('SELECT mfa_secret_enc FROM users WHERE mfa_secret_enc IS NOT NULL').all()) {
-    decryptData(row.mfa_secret_enc);
-  }
 }
 
 function restrictDbFiles(file) {

@@ -9,8 +9,6 @@ const BCRYPT_ROUNDS = 10;
 const JWT_ALGORITHM = 'HS256';
 const JWT_ISSUER = 'tickekette';
 const SESSION_AUDIENCE = 'staff-session';
-const MFA_AUDIENCE = 'mfa-setup';
-const MFA_COOKIE = 'tkk_mfa_setup';
 
 export const hashPassword = (password) => bcrypt.hashSync(password, BCRYPT_ROUNDS);
 
@@ -34,7 +32,7 @@ export function verifyCredentials(email, password) {
   return { user: blocked ? null : user, blocked: Boolean(blocked) };
 }
 
-export function recordAuthenticationFailure(user) {
+function recordAuthenticationFailure(user) {
   const failures = (user.failed_login_count ?? 0) + 1;
   const delay = progressiveDelaySeconds(failures);
   const blockedUntil = delay ? new Date(Date.now() + delay * 1000).toISOString() : null;
@@ -75,41 +73,6 @@ export function closeSession(res, userId = null) {
   res.clearCookie(config.session.cookieName, cookieOptions());
 }
 
-const mfaCookieOptions = () => ({ ...cookieOptions(), path: '/api/auth', maxAge: 10 * 60_000 });
-
-export function openMfaSetupSession(res, user) {
-  const token = jwt.sign({ uid: user.id, purpose: MFA_AUDIENCE }, config.jwtSecret, {
-    algorithm: JWT_ALGORITHM,
-    audience: MFA_AUDIENCE,
-    issuer: JWT_ISSUER,
-    expiresIn: 10 * 60,
-    jwtid: crypto.randomUUID(),
-  });
-  res.cookie(MFA_COOKIE, token, mfaCookieOptions());
-}
-
-export function closeMfaSetupSession(res) {
-  res.clearCookie(MFA_COOKIE, { ...mfaCookieOptions(), maxAge: undefined });
-}
-
-export function requireMfaSetup(req, _res, next) {
-  try {
-    const payload = jwt.verify(req.cookies?.[MFA_COOKIE], config.jwtSecret, {
-      algorithms: [JWT_ALGORITHM],
-      audience: MFA_AUDIENCE,
-      issuer: JWT_ISSUER,
-    });
-    if (typeof payload === 'string' || payload.purpose !== MFA_AUDIENCE || !Number.isSafeInteger(payload.uid)) {
-      throw new Error('invalid setup session');
-    }
-    req.mfaUser = get('SELECT * FROM users WHERE id = ?', payload.uid);
-    if (!req.mfaUser) throw new Error('missing user');
-    next();
-  } catch {
-    throw unauthorized('Configuration MFA expirée, reconnectez-vous.');
-  }
-}
-
 export function publicUser(user) {
   const collective = user.collective_id ? get('SELECT id, name, slug, color FROM collectives WHERE id = ?', user.collective_id) : null;
   return { id: user.id, name: user.name, email: user.email, role: user.role, collective };
@@ -131,9 +94,8 @@ export function requireAuth(...roles) {
     } catch {
       throw unauthorized('Session expirée, reconnectez-vous.');
     }
-    const user = get('SELECT id, name, email, role, collective_id, session_version, mfa_enabled FROM users WHERE id = ?', payload.uid);
+    const user = get('SELECT id, name, email, role, collective_id, session_version FROM users WHERE id = ?', payload.uid);
     if (!user || user.session_version !== payload.sv) throw unauthorized('Session expirée, reconnectez-vous.');
-    if ((user.role === 'admin' || user.role === 'superadmin') && !user.mfa_enabled) throw unauthorized('MFA requise, reconnectez-vous.');
     if (roles.length && !roles.includes(user.role)) throw forbidden("Vous n'avez pas accès à cette page.");
     req.user = user;
     next();

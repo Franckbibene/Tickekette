@@ -20,7 +20,7 @@ npm run dev
 
 Au premier `npm run dev`, quatre secrets aléatoires de 256 bits sont créés automatiquement dans
 `server/.env` avec les permissions `0600`. Ils ne sont ni affichés ni versionnés. Un fichier existant n'est jamais
-remplacé, car changer ces valeurs invaliderait les sessions, billets, secrets MFA et données déjà chiffrées.
+remplacé, car changer ces valeurs invaliderait les sessions, billets et données déjà chiffrées.
 
 - Site : http://localhost:5173
 - API : http://localhost:3001
@@ -34,8 +34,6 @@ fait échouer le démarrage. Tous les modes, y compris le mode durci, restent li
 
 Mot de passe : `demo1234`. Ces comptes n'existent que dans la base de démo : le jeu de données est refusé en
 production et le bloc « comptes de démo » de la page de connexion est retiré du build de production.
-À la première connexion d'un admin ou super-admin, l'application impose l'activation TOTP (application
-d'authentification). Les comptes contrôleurs n'ont pas ce privilège et ne sont pas soumis à cette étape.
 
 | Compte                  | Rôle                                            |
 | ----------------------- | ----------------------------------------------- |
@@ -65,7 +63,7 @@ Les tests reprennent la recette du cahier des charges (section 10) et les points
 50 achats simultanés pour la dernière place, notification de paiement reçue 2 ou 3 fois, double clic,
 clé d'idempotence, expiration à 10 min et 48 h, virement en retard, liste d'attente, annulation,
 deux téléphones hors ligne sur le même billet, QR code falsifié, séparation des collectifs, CSRF,
-session falsifiée, révoquée ou expirée, MFA et non-rejeu TOTP, capacités de commande condensées, autorisations
+session falsifiée, révoquée ou expirée, capacités de commande condensées, autorisations
 hors ligne expirables, validation stricte des webhooks, limites de débit, prix envoyé par le navigateur ignoré, valeurs limites
 (0, -1, maximum, maximum + 1), redirections ouvertes, liens `javascript:`, en-têtes HTTP, configuration de production.
 
@@ -100,7 +98,6 @@ La règle suivie : **tout ce qui vient du navigateur est non fiable**. Le front 
 | Injection SQL                       | Requêtes préparées uniquement (paramètres liés)                                                      | —                                                           |
 | XSS                                 | CSP stricte (`script-src 'self'`), mails échappés                                                    | Aucun `dangerouslySetInnerHTML`, liens `http(s)` vérifiés   |
 | Vol de session                      | Cookie `HttpOnly`, `SameSite=Strict` (`Secure` en HTTPS local) ; JWT avec `jti` et version révocable | Aucun jeton manipulé en JavaScript                          |
-| Compte privilégié compromis         | TOTP obligatoire pour admin/super-admin ; secret chiffré AES-GCM ; code non rejouable                | Enrôlement par QR code                                      |
 | CSRF                                | `SameSite=Strict` + en-tête `X-Requested-With` obligatoire, pas de CORS                              | En-tête ajouté par le client HTTP                           |
 | Accès aux données d'un autre (IDOR) | Collectif pris dans la session, ressource étrangère = 404 ; lien commande condensé puis cookie court | `RequireRole` (redirection seulement)                       |
 | Force brute, blocage du stock       | Limites par IP + délai progressif persistant par compte ; limites réservations, paiement et scans    | —                                                           |

@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import { after, before, beforeEach } from 'node:test';
-import { generate } from 'otplib';
 import { createApp } from '../src/app.js';
 import { clock } from '../src/clock.js';
 import { config } from '../src/config.js';
@@ -64,13 +63,8 @@ export function createClient(ctx) {
     }
     return { status: res.status, body: json, headers: res.headers, setCookie: setCookies.join(', ') };
   }
-  async function login(email, password = PASSWORD) {
-    const response = await request('/api/auth/login', { method: 'POST', body: { email, password } });
-    if (response.status !== 202 || !response.body?.mfaRequired) return response;
-    if (!response.body.setupRequired) throw new Error('Le test doit connaître le secret MFA déjà configuré.');
-    const setup = await request('/api/auth/mfa/setup');
-    const otp = await generate({ secret: setup.body.secret });
-    return request('/api/auth/mfa/confirm', { method: 'POST', body: { otp } });
+  function login(email, password = PASSWORD) {
+    return request('/api/auth/login', { method: 'POST', body: { email, password } });
   }
   return {
     request,

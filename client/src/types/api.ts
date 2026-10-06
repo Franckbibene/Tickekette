@@ -17,16 +17,6 @@ export interface User {
   collective: CollectiveRef | null;
 }
 
-export interface MfaChallenge {
-  mfaRequired: true;
-  setupRequired: boolean;
-}
-
-export interface MfaSetup {
-  secret: string;
-  uri: string;
-}
-
 export type EventStatus = 'draft' | 'published' | 'cancelled';
 export type OrderStatus = 'pending' | 'paid' | 'expired' | 'cancelled' | 'refunded';
 export type PaymentMethod = 'card' | 'transfer';

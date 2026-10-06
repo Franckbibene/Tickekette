@@ -7,7 +7,6 @@ export interface SessionUser {
   role: 'superadmin' | 'admin' | 'controller';
   collective_id: number | null;
   session_version: number;
-  mfa_enabled: number;
 }
 
 declare global {
@@ -15,7 +14,6 @@ declare global {
     interface Request {
       // Renseigné par requireAuth() à partir du cookie de session vérifié.
       user?: SessionUser;
-      mfaUser?: any;
       order?: any;
     }
   }

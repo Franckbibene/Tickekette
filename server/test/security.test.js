@@ -1,12 +1,10 @@
 // Tests de sécurité : validation, limites, logique métier, contrôle d'accès, en-têtes.
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { generate } from 'otplib';
 import { clock } from '../src/clock.js';
 import { get, run } from '../src/db.js';
 import { recordPayment } from '../src/services/payments.js';
 import {
-  PASSWORD,
   accessOrder,
   buy,
   createClient,
@@ -225,29 +223,6 @@ describe('Validation des champs', () => {
 });
 
 describe('Authentification', () => {
-  test('MFA obligatoire pour un admin, secret chiffré et code TOTP non rejouable', async () => {
-    const { email } = makeCollective('a');
-    const client = anonymous();
-    const challenge = await client.request('/api/auth/login', { method: 'POST', body: { email, password: PASSWORD } });
-    assert.equal(challenge.status, 202);
-    assert.deepEqual(challenge.body, { mfaRequired: true, setupRequired: true });
-    const setup = await client.request('/api/auth/mfa/setup');
-    assert.equal(setup.headers.get('cache-control'), 'no-store');
-    const otp = await generate({ secret: setup.body.secret });
-    assert.equal((await client.request('/api/auth/mfa/confirm', { method: 'POST', body: { otp } })).status, 200);
-    const stored = get('SELECT mfa_secret_enc FROM users WHERE email = ?', email).mfa_secret_enc;
-    assert.ok(stored.startsWith('v1.'));
-    assert.equal(stored.includes(setup.body.secret), false);
-
-    await client.request('/api/auth/logout', { method: 'POST' });
-    assert.equal(
-      (await client.request('/api/auth/login', { method: 'POST', body: { email, password: PASSWORD } })).body.setupRequired,
-      false,
-    );
-    const replay = await client.request('/api/auth/login', { method: 'POST', body: { email, password: PASSWORD, otp } });
-    assert.equal(replay.status, 401);
-  });
-
   test('connexion : session en cookie HttpOnly SameSite=Strict, jamais dans la réponse', async () => {
     const { email } = makeCollective('a');
     const res = await anonymous().login(email);

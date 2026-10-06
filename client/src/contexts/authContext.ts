@@ -1,11 +1,9 @@
 import { createContext } from 'react';
-import type { MfaChallenge, MfaSetup, User } from '../types/api';
+import type { User } from '../types/api';
 
 export interface AuthContextValue {
   user: User | null;
-  login: (email: string, password: string, otp?: string) => Promise<User | MfaChallenge>;
-  mfaSetup: () => Promise<MfaSetup>;
-  confirmMfa: (otp: string) => Promise<User>;
+  login: (email: string, password: string) => Promise<User>;
   logout: () => Promise<void>;
 }
 

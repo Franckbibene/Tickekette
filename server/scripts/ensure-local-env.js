@@ -11,7 +11,7 @@ function createContents() {
 
   return [
     '# Configuration locale générée automatiquement. Ne jamais versionner ce fichier.',
-    '# Conserver ces valeurs : les changer invalide sessions, billets, MFA ou données chiffrées.',
+    '# Conserver ces valeurs : les changer invalide sessions, billets ou données chiffrées.',
     ...generatedSecrets,
     '',
     'PUBLIC_URL=http://localhost:5173',

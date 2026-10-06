@@ -55,19 +55,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [forget]);
 
-  const login = useCallback(async (email: string, password: string, otp?: string) => {
-    const result = await authApi.login(email, password, otp);
-    if ('role' in result) {
-      storage.set(STORAGE_KEYS.user, toCache(result));
-      setUser(result);
-    }
-    return result;
-  }, []);
-
-  const mfaSetup = useCallback(() => authApi.mfaSetup(), []);
-
-  const confirmMfa = useCallback(async (otp: string) => {
-    const u = await authApi.confirmMfa(otp);
+  const login = useCallback(async (email: string, password: string) => {
+    const u = await authApi.login(email, password);
     storage.set(STORAGE_KEYS.user, toCache(u));
     setUser(u);
     return u;
@@ -85,6 +74,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     forget();
   }, [forget]);
 
-  const value = useMemo(() => ({ user, login, mfaSetup, confirmMfa, logout }), [user, login, mfaSetup, confirmMfa, logout]);
+  const value = useMemo(() => ({ user, login, logout }), [user, login, logout]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
