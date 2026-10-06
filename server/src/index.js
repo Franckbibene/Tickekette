@@ -22,6 +22,8 @@ if (!config.isProduction && !get('SELECT id FROM collectives LIMIT 1')) {
 config.apiUrl ||= `http://localhost:${config.port}`;
 createApp().listen(config.port, () => {
   console.info(`API Tickekette sur le port ${config.port}`);
+  // Signal visible : ces routes livrent les mails (adresses, liens de commande) sans authentification.
+  if (config.devTools) console.warn('⚠ Outils de démonstration actifs sur /api/dev — ne jamais exposer ce serveur publiquement.');
 });
 
 // Libère régulièrement les réservations non payées expirées (5.2).

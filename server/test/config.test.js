@@ -15,6 +15,15 @@ function loadConfig(env) {
   });
 }
 
+// Lit une valeur de configuration dans un processus neuf (config.js lit l'environnement à l'import).
+function readConfig(env, expression) {
+  return spawnSync(
+    process.execPath,
+    ['--input-type=module', '-e', `const { config } = await import('./src/config.js'); console.log(${expression})`],
+    { cwd: serverDir, env: { PATH: process.env.PATH, ...env }, encoding: 'utf8' },
+  ).stdout.trim();
+}
+
 const PROD = {
   NODE_ENV: 'production',
   JWT_SECRET: LONG_SECRET,
@@ -42,15 +51,16 @@ describe('Configuration de production', () => {
   });
 
   test('outils de démo et paiement simulé désactivés par défaut', () => {
-    const res = spawnSync(
-      process.execPath,
-      [
-        '--input-type=module',
-        '-e',
-        "const { config } = await import('./src/config.js'); console.log(config.devTools, config.paymentProvider)",
-      ],
-      { cwd: serverDir, env: { PATH: process.env.PATH, ...PROD }, encoding: 'utf8' },
-    );
-    assert.equal(res.stdout.trim(), 'false none');
+    assert.equal(readConfig(PROD, 'config.devTools, config.paymentProvider'), 'false none');
+  });
+
+  test('outils de démo : actifs seulement sur demande explicite, jamais en production', () => {
+    // Un déploiement qui oublie NODE_ENV ne doit pas exposer les mails ni l'horloge.
+    assert.equal(readConfig({}, 'config.devTools'), 'false');
+    assert.equal(readConfig({ NODE_ENV: 'staging' }, 'config.devTools'), 'false');
+    // Ce que pose `npm run dev` : la démo reste utilisable.
+    assert.equal(readConfig({ ENABLE_DEV_TOOLS: 'true' }, 'config.devTools'), 'true');
+    // La production reste un verrou indépendant de la variable.
+    assert.equal(readConfig({ ...PROD, ENABLE_DEV_TOOLS: 'true' }, 'config.devTools'), 'false');
   });
 });

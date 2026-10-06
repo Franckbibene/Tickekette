@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning --watch src/index.js",
+    "dev": "ENABLE_DEV_TOOLS=true node --env-file-if-exists=.env --disable-warning=ExperimentalWarning --watch src/index.js",
     "start": "NODE_ENV=production node --env-file-if-exists=.env --disable-warning=ExperimentalWarning src/index.js",
     "seed": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning src/seed.js",
     "test": "NODE_ENV=test node --disable-warning=ExperimentalWarning --test \"test/**/*.test.js\"",

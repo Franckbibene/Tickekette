@@ -56,8 +56,11 @@ export const config = {
   apiUrl: env.API_URL || '',
   // 'mock' : prestataire simulé (démo). 'none' : paiement carte indisponible.
   paymentProvider,
-  // Boîte mail de démo et horloge accélérable : jamais en production.
-  devTools: !isProduction && flag('ENABLE_DEV_TOOLS', true),
+  // Boîte mail de démo et horloge accélérable : accessibles sans authentification (la démo
+  // les utilise en tant qu'acheteur anonyme), donc activées uniquement sur demande explicite.
+  // `npm run dev` pose la variable ; partout ailleurs, son absence vaut « désactivé » : un
+  // déploiement qui oublie NODE_ENV n'expose ni les mails ni l'horloge. Jamais en production.
+  devTools: !isProduction && flag('ENABLE_DEV_TOOLS', false),
 
   session: {
     cookieName: 'tkk_session',
