@@ -17,6 +17,8 @@ export function renderWithProviders(ui: ReactElement, { path = '/', route = '/',
   const value: AuthContextValue = {
     user,
     login: vi.fn(),
+    mfaSetup: vi.fn(),
+    confirmMfa: vi.fn(),
     logout: vi.fn(),
     ...auth,
   };

@@ -25,7 +25,7 @@ export function TransferPanel({ order, onChanged }: { order: FetchedOrder; onCha
         <dd>{formatDateTime(order.expiresAt, order.event.timezone, lang)}</dd>
       </dl>
       <OrderSummary order={order} />
-      <ReleaseSeatsButton token={order.token} onChanged={onChanged} />
+      <ReleaseSeatsButton onChanged={onChanged} />
     </section>
   );
 }

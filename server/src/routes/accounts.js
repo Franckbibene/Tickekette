@@ -1,9 +1,22 @@
 import { Router } from 'express';
 import { all, get, run, tx } from '../db.js';
 import { clock } from '../clock.js';
-import { closeSession, hashPassword, openSession, publicUser, requireAuth, verifyCredentials } from '../auth.js';
+import {
+  clearAuthenticationFailures,
+  closeMfaSetupSession,
+  closeSession,
+  hashPassword,
+  openMfaSetupSession,
+  openSession,
+  publicUser,
+  recordAuthenticationFailure,
+  requireAuth,
+  requireMfaSetup,
+  verifyCredentials,
+} from '../auth.js';
 import { HttpError, conflict } from '../errors.js';
 import { LIMITS, email, password, slug, text } from '../validation.js';
+import { mfaSetup, requiresMfa, verifyMfa } from '../services/mfa.js';
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const DEFAULT_COLOR = '#9a3412';
@@ -12,19 +25,53 @@ const IBAN_MAX = 42;
 export function authRouter(limits) {
   const router = Router();
 
-  router.post('/login', limits.login, (req, res) => {
+  router.post('/login', limits.login, async (req, res) => {
     // Pas de validation détaillée ici : le message reste identique quelle que soit l'erreur,
     // pour ne pas indiquer si un compte existe.
     const address = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase().slice(0, LIMITS.email) : '';
     const secret = typeof req.body?.password === 'string' ? req.body.password.slice(0, 200) : '';
-    const user = address && secret ? verifyCredentials(address, secret) : null;
-    if (!user) throw new HttpError(401, 'bad_credentials', 'E-mail ou mot de passe incorrect.');
+    const result = address && secret ? verifyCredentials(address, secret) : { user: null, blocked: false };
+    if (!result.user) {
+      if (result.blocked) throw new HttpError(429, 'login_delayed', 'Trop de tentatives. Réessayez plus tard.');
+      throw new HttpError(401, 'bad_credentials', 'E-mail ou mot de passe incorrect.');
+    }
+    const user = result.user;
+    if (requiresMfa(user)) {
+      if (!user.mfa_enabled) {
+        openMfaSetupSession(res, user);
+        return res.status(202).json({ mfaRequired: true, setupRequired: true });
+      }
+      if (typeof req.body?.otp !== 'string') return res.status(202).json({ mfaRequired: true, setupRequired: false });
+      if (!(await verifyMfa(user, req.body.otp))) {
+        recordAuthenticationFailure(user);
+        throw new HttpError(401, 'bad_credentials', 'E-mail, mot de passe ou code incorrect.');
+      }
+    }
+    clearAuthenticationFailures(user.id);
+    openSession(res, user);
+    return res.json(publicUser(user));
+  });
+
+  router.get('/mfa/setup', requireMfaSetup, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (!requiresMfa(req.mfaUser) || req.mfaUser.mfa_enabled) throw new HttpError(409, 'mfa_already_configured', 'MFA déjà configurée.');
+    res.json(mfaSetup(req.mfaUser.id));
+  });
+
+  router.post('/mfa/confirm', limits.login, requireMfaSetup, async (req, res) => {
+    const user = get('SELECT * FROM users WHERE id = ?', req.mfaUser.id);
+    if (!(await verifyMfa(user, req.body?.otp, { enable: true }))) {
+      recordAuthenticationFailure(user);
+      throw new HttpError(401, 'bad_credentials', 'Code incorrect.');
+    }
+    clearAuthenticationFailures(user.id);
+    closeMfaSetupSession(res);
     openSession(res, user);
     res.json(publicUser(user));
   });
 
-  router.post('/logout', (_req, res) => {
-    closeSession(res);
+  router.post('/logout', requireAuth(), (req, res) => {
+    closeSession(res, req.user.id);
     res.status(204).end();
   });
 

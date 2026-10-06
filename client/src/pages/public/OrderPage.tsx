@@ -1,4 +1,5 @@
-import { Link, useParams } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ordersApi } from '../../api/orders';
 import { EventTime } from '../../components/common/EventTime';
 import { ErrorMessage, Loading } from '../../components/common/Feedback';
@@ -15,9 +16,20 @@ const REFRESH_MS = 4000;
 
 export default function OrderPage() {
   const token = useParams().token ?? '';
+  const navigate = useNavigate();
   const { t } = useLang();
-  const query = useApiQuery(`order:${token}`, (signal) => ordersApi.get(token, signal), { intervalMs: REFRESH_MS });
+  const query = useApiQuery(
+    token ? `order-access:${token}` : 'order-current',
+    (signal) => (token ? ordersApi.access(token, signal) : ordersApi.get(signal)),
+    {
+      intervalMs: REFRESH_MS,
+    },
+  );
   const order = query.data;
+
+  useEffect(() => {
+    if (token && order) void navigate('/commande', { replace: true });
+  }, [navigate, order, token]);
 
   if (!order) {
     return (

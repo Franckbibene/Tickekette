@@ -20,7 +20,9 @@ export function extractTicketCode(text: string): string {
 }
 
 export function decideOffline(manifest: Manifest | null, code: string, acceptedZones: number[]): OfflineDecision {
-  if (!manifest) return { kind: 'no_manifest' };
+  if (!manifest || !Number.isFinite(Date.parse(manifest.offlineExpiresAt)) || Date.now() >= Date.parse(manifest.offlineExpiresAt)) {
+    return { kind: 'no_manifest' };
+  }
   const ticket = manifest.tickets.find((t) => t.code === code);
   if (!ticket) return { kind: 'unknown' };
   if (acceptedZones.length > 0 && !acceptedZones.includes(ticket.ticketTypeId)) return { kind: 'wrong_zone', ticket };

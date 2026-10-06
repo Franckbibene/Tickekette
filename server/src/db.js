@@ -1,4 +1,8 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { decryptData, encryptData, isEncryptedData } from './dataEncryption.js';
 import { INDEXES, MIGRATIONS, SCHEMA } from './schema.js';
 
 // Accès à la base : uniquement des requêtes préparées avec paramètres liés.
@@ -19,16 +23,70 @@ function migrate() {
   }
 }
 
+const orderTokenHash = (token) => crypto.createHash('sha256').update(token).digest('hex');
+
+// Migration des anciens jetons en clair vers une table de condensats. La colonne historique
+// reste présente pour compatibilité SQLite, mais ne contient plus de capacité utilisable.
+function migrateOrderTokens() {
+  const rows = db
+    .prepare(
+      `SELECT o.id, o.token, o.created_at, e.starts_at FROM orders o
+       JOIN events e ON e.id = o.event_id WHERE o.token NOT LIKE 'retired:%'`,
+    )
+    .all();
+  const add = db.prepare('INSERT OR IGNORE INTO order_access_tokens (token_hash, order_id, expires_at, created_at) VALUES (?, ?, ?, ?)');
+  const retire = db.prepare('UPDATE orders SET token = ? WHERE id = ?');
+  for (const row of rows) {
+    const expiresAt = new Date(Math.max(Date.parse(row.starts_at) + 30 * 86_400_000, Date.now() + 86_400_000)).toISOString();
+    add.run(orderTokenHash(row.token), row.id, expiresAt, row.created_at);
+    retire.run(`retired:${row.id}`, row.id);
+  }
+}
+
+function migrateEmailBodies() {
+  const update = db.prepare('UPDATE emails SET html = ? WHERE id = ?');
+  for (const row of db.prepare('SELECT id, html FROM emails').all()) {
+    if (isEncryptedData(row.html)) decryptData(row.html);
+    else update.run(encryptData(row.html), row.id);
+  }
+  // Une mauvaise clé doit empêcher le démarrage, pas rendre la MFA inutilisable
+  // silencieusement au prochain login.
+  for (const row of db.prepare('SELECT mfa_secret_enc FROM users WHERE mfa_secret_enc IS NOT NULL').all()) {
+    decryptData(row.mfa_secret_enc);
+  }
+}
+
+function restrictDbFiles(file) {
+  if (file === ':memory:') return;
+  for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
+    if (fs.existsSync(candidate)) fs.chmodSync(candidate, 0o600);
+  }
+}
+
 export function initDb(file) {
   if (db) db.close();
   statements.clear();
   depth = 0;
+  if (file !== ':memory:') {
+    // Les futurs WAL, SHM, exports temporaires et sauvegardes créés par ce processus
+    // héritent d'un mode privé. DB_FILE doit donc pointer vers un répertoire dédié.
+    process.umask(0o077);
+    const directory = path.dirname(file);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    fs.chmodSync(directory, 0o700);
+    const handle = fs.openSync(file, 'a', 0o600);
+    fs.closeSync(handle);
+    fs.chmodSync(file, 0o600);
+  }
   db = new DatabaseSync(file);
   db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   if (file !== ':memory:') db.exec('PRAGMA journal_mode = WAL;');
   db.exec(SCHEMA);
   migrate();
+  migrateOrderTokens();
+  migrateEmailBodies();
   db.exec(INDEXES);
+  restrictDbFiles(file);
   return db;
 }
 

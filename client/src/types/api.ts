@@ -17,6 +17,16 @@ export interface User {
   collective: CollectiveRef | null;
 }
 
+export interface MfaChallenge {
+  mfaRequired: true;
+  setupRequired: boolean;
+}
+
+export interface MfaSetup {
+  secret: string;
+  uri: string;
+}
+
 export type EventStatus = 'draft' | 'published' | 'cancelled';
 export type OrderStatus = 'pending' | 'paid' | 'expired' | 'cancelled' | 'refunded';
 export type PaymentMethod = 'card' | 'transfer';
@@ -77,7 +87,6 @@ export interface Ticket {
 }
 
 export interface Order {
-  token: string;
   reference: string;
   status: OrderStatus;
   buyerName: string;
@@ -312,6 +321,8 @@ export interface Manifest {
   ticketTypes: { id: number; name: string }[];
   tickets: ManifestTicket[];
   generatedAt: string;
+  offlineGrant: string;
+  offlineExpiresAt: string;
 }
 
 export type ScanOutcome = 'ok' | 'duplicate' | 'invalid' | 'cancelled' | 'wrong_event';

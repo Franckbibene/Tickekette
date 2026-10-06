@@ -12,9 +12,10 @@ export const STORAGE_KEYS = {
   manifest: (eventId: number) => `tkk_manifest_${eventId}`,
   queue: (eventId: number) => `tkk_queue_${eventId}`,
   conflicts: (eventId: number) => `tkk_conflicts_${eventId}`,
+  logoutPending: 'tkk_logout_pending',
 } as const;
 
-const OFFLINE_PREFIXES = ['tkk_manifest_', 'tkk_conflicts_', STORAGE_KEYS.scanEvents];
+const OFFLINE_PREFIXES = ['tkk_manifest_', 'tkk_queue_', 'tkk_conflicts_', STORAGE_KEYS.scanEvents];
 
 export const storage = {
   get<T>(key: string, fallback: T): T {
@@ -35,8 +36,8 @@ export const storage = {
   },
 };
 
-// À la déconnexion : on efface les listes de billets (noms des participants) du téléphone.
-// Les scans pas encore synchronisés sont conservés pour ne perdre aucune entrée.
+// À la déconnexion : on efface toutes les données de contrôle, y compris les scans en
+// attente. Les conserver permettrait à un autre utilisateur du téléphone de les lire.
 export function clearOfflineData(): void {
   try {
     for (const key of Object.keys(localStorage)) {

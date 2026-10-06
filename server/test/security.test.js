@@ -1,10 +1,24 @@
 // Tests de sécurité : validation, limites, logique métier, contrôle d'accès, en-têtes.
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { generate } from 'otplib';
 import { clock } from '../src/clock.js';
 import { get, run } from '../src/db.js';
 import { recordPayment } from '../src/services/payments.js';
-import { buy, createClient, makeCollective, makeEvent, makeUser, payByCard, setupServer } from './helpers.js';
+import {
+  PASSWORD,
+  accessOrder,
+  buy,
+  createClient,
+  getOrder,
+  makeCollective,
+  makeEvent,
+  makeUser,
+  orderByToken,
+  payByCard,
+  setupServer,
+  signWebhook,
+} from './helpers.js';
 
 const ctx = setupServer();
 const anonymous = () => createClient(ctx);
@@ -55,14 +69,14 @@ describe('Prix : jamais fourni par le navigateur', () => {
       },
     });
     assert.equal(res.status, 201);
-    assert.equal(get('SELECT total_cents FROM orders WHERE token = ?', res.body.token).total_cents, 5000);
+    assert.equal(orderByToken(res.body.token).total_cents, 5000);
   });
 
   test('un paiement d’un montant différent de la commande est remboursé', async () => {
     const { cid } = makeCollective('a');
     const { eventId, typeIds } = makeEvent(cid, [5]);
     const { body } = await buy(anonymous(), eventId, typeIds[0], 1, { paymentMethod: 'transfer' });
-    const order = get('SELECT * FROM orders WHERE token = ?', body.token);
+    const order = orderByToken(body.token);
     const result = recordPayment(order.id, { provider: 'transfer', providerPaymentId: 'x', amountCents: 1 });
     assert.equal(result.status, 'refunded_amount_mismatch');
     assert.equal(get('SELECT status FROM orders WHERE id = ?', order.id).status, 'pending');
@@ -92,7 +106,7 @@ describe('Double soumission', () => {
         body: { buyerName: 'A', buyerEmail: 'a@exemple.test', items: [{ ticketTypeId: typeIds[0], quantity: 2 }] },
       });
     const [a, b] = await Promise.all([send(), send()]);
-    assert.equal(a.body.token, b.body.token);
+    assert.notEqual(a.body.token, b.body.token);
     assert.equal(get('SELECT COUNT(*) AS n FROM orders').n, 1);
     assert.equal(get('SELECT held FROM ticket_types WHERE id = ?', typeIds[0]).held, 2);
   });
@@ -188,15 +202,59 @@ describe('Validation des champs', () => {
     assert.equal((await create({ startsAt: '2000-01-01T00:00:00Z' })).status, 400);
     assert.equal((await create({})).status, 201);
   });
+
+  test('admin : capacité totale excessive même avec des quotas unitaires valides : refusée', async () => {
+    const { email } = makeCollective('a');
+    const admin = anonymous();
+    await admin.login(email);
+    const res = await admin.request('/api/admin/events', {
+      method: 'POST',
+      body: {
+        title: 'Événement démesuré',
+        venue: 'Salle',
+        startsAt: new Date(Date.now() + 86_400_000).toISOString(),
+        ticketTypes: [
+          { name: 'A', priceCents: 1000, quota: 6000 },
+          { name: 'B', priceCents: 1000, quota: 6000 },
+        ],
+      },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'capacity_too_high');
+  });
 });
 
 describe('Authentification', () => {
+  test('MFA obligatoire pour un admin, secret chiffré et code TOTP non rejouable', async () => {
+    const { email } = makeCollective('a');
+    const client = anonymous();
+    const challenge = await client.request('/api/auth/login', { method: 'POST', body: { email, password: PASSWORD } });
+    assert.equal(challenge.status, 202);
+    assert.deepEqual(challenge.body, { mfaRequired: true, setupRequired: true });
+    const setup = await client.request('/api/auth/mfa/setup');
+    assert.equal(setup.headers.get('cache-control'), 'no-store');
+    const otp = await generate({ secret: setup.body.secret });
+    assert.equal((await client.request('/api/auth/mfa/confirm', { method: 'POST', body: { otp } })).status, 200);
+    const stored = get('SELECT mfa_secret_enc FROM users WHERE email = ?', email).mfa_secret_enc;
+    assert.ok(stored.startsWith('v1.'));
+    assert.equal(stored.includes(setup.body.secret), false);
+
+    await client.request('/api/auth/logout', { method: 'POST' });
+    assert.equal(
+      (await client.request('/api/auth/login', { method: 'POST', body: { email, password: PASSWORD } })).body.setupRequired,
+      false,
+    );
+    const replay = await client.request('/api/auth/login', { method: 'POST', body: { email, password: PASSWORD, otp } });
+    assert.equal(replay.status, 401);
+  });
+
   test('connexion : session en cookie HttpOnly SameSite=Strict, jamais dans la réponse', async () => {
     const { email } = makeCollective('a');
     const res = await anonymous().login(email);
     assert.equal(res.status, 200);
     assert.match(res.setCookie, /HttpOnly/i);
     assert.match(res.setCookie, /SameSite=Strict/i);
+    assert.doesNotMatch(res.setCookie, /; Secure/i);
     assert.equal(res.body.token, undefined);
     assert.equal(res.body.password_hash, undefined);
   });
@@ -236,6 +294,113 @@ describe('Authentification', () => {
     assert.equal((await admin.request(`/api/admin/users/${id}`, { method: 'DELETE' })).status, 204);
     assert.equal((await controller.request('/api/scan/events')).status, 401);
   });
+
+  test('une nouvelle connexion révoque immédiatement l’ancienne session', async () => {
+    const { cid } = makeCollective('a');
+    makeUser(cid, 'ctrl@a.test', 'controller');
+    const first = anonymous();
+    const second = anonymous();
+    await first.login('ctrl@a.test');
+    await second.login('ctrl@a.test');
+    assert.equal((await first.request('/api/scan/events')).status, 401);
+    assert.equal((await second.request('/api/scan/events')).status, 200);
+  });
+});
+
+describe('Capacités de commande', () => {
+  test('jeton condensé en base, échangé contre un cookie court et réponses non mises en cache', async () => {
+    const client = anonymous();
+    const { cid } = makeCollective('a');
+    const { eventId, typeIds } = makeEvent(cid, [5]);
+    const purchase = await buy(client, eventId, typeIds[0]);
+    const order = orderByToken(purchase.body.token);
+    await payByCard(client, purchase.body.token, false);
+    assert.match(order.token, /^retired:/);
+    assert.equal(get('SELECT COUNT(*) AS n FROM order_access_tokens WHERE token_hash = ?', purchase.body.token).n, 0);
+    assert.equal(get('SELECT COUNT(*) AS n FROM emails WHERE html LIKE ?', `%${purchase.body.token}%`).n, 0);
+    assert.match(get('SELECT html FROM emails ORDER BY id DESC LIMIT 1').html, /^v1\./);
+    const access = await accessOrder(client, purchase.body.token);
+    assert.equal(access.status, 200);
+    assert.match(access.setCookie, /HttpOnly/i);
+    assert.match(access.setCookie, /SameSite=Strict/i);
+    assert.match(access.headers.get('cache-control'), /no-store/);
+    assert.equal((await client.request(`/api/orders/${purchase.body.token}`)).status, 404);
+  });
+
+  test('une commande payée ne peut pas être annulée sans confirmation e-mail valide', async () => {
+    const client = anonymous();
+    const { cid } = makeCollective('a');
+    const { eventId, typeIds } = makeEvent(cid, [5]);
+    const purchase = await buy(client, eventId, typeIds[0]);
+    await payByCard(client, purchase.body.token, false);
+    await accessOrder(client, purchase.body.token);
+    assert.equal((await client.request('/api/orders/cancel', { method: 'POST' })).status, 403);
+    assert.equal((await client.request('/api/orders/cancel-code', { method: 'POST' })).status, 204);
+    assert.equal((await client.request('/api/orders/cancel', { method: 'POST', body: { confirmationCode: '000000' } })).status, 403);
+    assert.equal(orderByToken(purchase.body.token).status, 'paid');
+  });
+});
+
+describe('Validation du webhook de paiement', () => {
+  test('montants, champs inconnus et timestamps hors fenêtre sont refusés', async () => {
+    const { cid } = makeCollective('a');
+    const { eventId, typeIds } = makeEvent(cid, [5]);
+    const purchase = await buy(anonymous(), eventId, typeIds[0]);
+    const order = orderByToken(purchase.body.token);
+    const base = {
+      id: 'evt_validation',
+      type: 'payment.succeeded',
+      createdAt: new Date().toISOString(),
+      data: { paymentId: 'pi_validation', orderId: order.id, amountCents: order.total_cents, feeCents: 0 },
+    };
+    const send = async (event) => {
+      const payload = JSON.stringify(event);
+      return fetch(`${ctx.base}/api/webhooks/payment`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-mock-signature': signWebhook(payload) },
+        body: payload,
+      });
+    };
+    assert.equal((await send({ ...base, data: { ...base.data, amountCents: -1 } })).status, 400);
+    assert.equal((await send({ ...base, data: { ...base.data, feeCents: base.data.amountCents + 1 } })).status, 400);
+    assert.equal((await send({ ...base, unexpected: true })).status, 400);
+    assert.equal((await send({ ...base, createdAt: new Date(Date.now() - 10 * 60_000).toISOString() })).status, 400);
+    assert.equal(get('SELECT COUNT(*) AS n FROM webhook_events').n, 0);
+  });
+});
+
+describe('Contrôle hors ligne borné', () => {
+  test('manifest limité autour de l’événement, grant signé requis et lots plafonnés', async () => {
+    const { cid, email } = makeCollective('a');
+    const admin = anonymous();
+    await admin.login(email);
+    const near = makeEvent(cid, [5], { inDays: 0.5 });
+    const far = makeEvent(cid, [5], { inDays: 10 });
+    assert.equal((await admin.request(`/api/scan/events/${far.eventId}/manifest`)).status, 409);
+    const manifest = await admin.request(`/api/scan/events/${near.eventId}/manifest`);
+    assert.equal(manifest.status, 200);
+    assert.ok(Date.parse(manifest.body.offlineExpiresAt) <= Date.now() + 8 * 3_600_000 + 1000);
+    assert.equal(
+      (
+        await admin.request(`/api/scan/events/${near.eventId}/sync`, {
+          method: 'POST',
+          body: { deviceId: 'porte-a', offlineGrant: 'grant-invalide', scans: [] },
+        })
+      ).status,
+      403,
+    );
+    const scans = Array.from({ length: 201 }, (_, i) => ({
+      clientScanId: `scan-${String(i).padStart(8, '0')}`,
+      text: 'billet-invalide',
+      scannedAt: new Date().toISOString(),
+    }));
+    const oversized = await admin.request(`/api/scan/events/${near.eventId}/sync`, {
+      method: 'POST',
+      body: { deviceId: 'porte-a', offlineGrant: manifest.body.offlineGrant, scans },
+    });
+    assert.equal(oversized.status, 400);
+    assert.equal(get('SELECT COUNT(*) AS n FROM scans').n, 0);
+  });
 });
 
 describe('CSRF', () => {
@@ -261,7 +426,7 @@ describe('Contrôle d’accès', () => {
     await adminB.login(b.email);
     const { eventId, typeIds } = makeEvent(a.cid, [5]);
     const { body } = await buy(anonymous(), eventId, typeIds[0], 1, { paymentMethod: 'transfer' });
-    const order = get('SELECT id FROM orders WHERE token = ?', body.token);
+    const order = orderByToken(body.token);
     assert.equal((await adminB.request(`/api/admin/orders/${order.id}/confirm-transfer`, { method: 'POST' })).status, 404);
     assert.equal(get('SELECT status FROM orders WHERE id = ?', order.id).status, 'pending');
   });
@@ -288,10 +453,13 @@ describe('Contrôle d’accès', () => {
     const buyer = anonymous();
     const { body } = await buy(buyer, eventA.eventId, eventA.typeIds[0]);
     await payByCard(buyer, body.token);
-    const qr = (await buyer.request(`/api/orders/${body.token}`)).body.tickets[0].qr;
+    const qr = (await getOrder(buyer, body.token)).body.tickets[0].qr;
     const adminB = anonymous();
     await adminB.login(b.email);
-    const res = await adminB.request(`/api/scan/events/${eventB.eventId}/check`, { method: 'POST', body: { text: qr, deviceId: 't' } });
+    const res = await adminB.request(`/api/scan/events/${eventB.eventId}/check`, {
+      method: 'POST',
+      body: { text: qr, deviceId: 't', clientScanId: 'scan-other-event' },
+    });
     assert.equal(res.body.result, 'wrong_event');
     assert.equal(res.body.ticket, null);
     assert.equal(res.body.firstEntry, null);
@@ -331,6 +499,7 @@ describe('En-têtes HTTP', () => {
     assert.doesNotMatch(csp, /script-src[^;]*'unsafe-inline'/);
     assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(res.headers.get('referrer-policy'), 'no-referrer');
+    assert.equal(res.headers.get('strict-transport-security'), null);
     assert.equal(res.headers.get('x-powered-by'), null);
     assert.equal(res.headers.get('access-control-allow-origin'), null);
   });

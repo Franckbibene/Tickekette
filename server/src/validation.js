@@ -16,6 +16,7 @@ export const LIMITS = {
   passwordMaxBytes: 72,
   priceCentsMax: 100_000_00,
   quotaMax: 100_000,
+  eventCapacityMax: 10_000,
   ticketTypesMax: 20,
   maxPerOrderMax: 50,
   cancelDeadlineHoursMax: 24 * 60,

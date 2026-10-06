@@ -24,6 +24,9 @@ export function createApp({
   mockPayments = config.paymentProvider === 'mock',
   rateLimits = !config.isTest,
 } = {}) {
+  if ((devTools || mockPayments) && !config.isDemo && !config.isTest) {
+    throw new Error('Les routes de démonstration et le paiement simulé sont interdits hors mode demo/test.');
+  }
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxy);
@@ -38,16 +41,19 @@ export function createApp({
   app.use('/api/auth', authRouter(limits));
   app.use('/api/platform', platformRouter);
   app.use('/api/admin', adminRouter);
-  app.use('/api/scan', scanRouter);
+  app.use('/api/scan', scanRouter(limits));
   if (mockPayments) app.use('/api/mock-provider', mockProviderRouter);
   if (devTools) app.use('/api/dev', devRouter);
-  app.use('/api', publicRouter(limits));
+  app.use('/api', publicRouter(limits, { paymentProvider: mockPayments ? 'mock' : 'none' }));
   app.use('/api', apiNotFound);
 
   // En production, le serveur sert aussi le front compilé (npm run build).
   if (fs.existsSync(clientDist)) {
     app.use(express.static(clientDist, { index: false }));
-    app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile(path.join(clientDist, 'index.html')));
+    app.get(/^\/(?!api\/).*/, (req, res) => {
+      if (req.path.startsWith('/commande')) res.set('Cache-Control', 'no-store, private');
+      res.sendFile(path.join(clientDist, 'index.html'));
+    });
   }
 
   app.use(errorHandler);

@@ -21,6 +21,8 @@ const manifest: Manifest = {
     },
   ],
   generatedAt: '2030-01-01T18:00:00Z',
+  offlineGrant: 'signed-test-grant',
+  offlineExpiresAt: '2030-01-02T02:00:00Z',
 };
 
 describe('décision hors ligne', () => {
@@ -35,6 +37,10 @@ describe('décision hors ligne', () => {
     expect(decideOffline(manifest, 'CCC', []).kind).toBe('cancelled');
     expect(decideOffline(manifest, 'BBB', [1]).kind).toBe('wrong_zone');
     expect(decideOffline(null, 'AAA', []).kind).toBe('no_manifest');
+  });
+
+  it('refuse toute décision locale après expiration de l’autorisation', () => {
+    expect(decideOffline({ ...manifest, offlineExpiresAt: '2020-01-01T00:00:00Z' }, 'AAA', []).kind).toBe('no_manifest');
   });
 
   it('les entrées synchronisées depuis les autres portes sont appliquées', () => {
