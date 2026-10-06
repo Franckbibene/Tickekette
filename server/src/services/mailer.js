@@ -3,10 +3,27 @@ import { clock } from '../clock.js';
 import { config } from '../config.js';
 import { cityOf, escapeHtml as e, formatDateTime, formatMoney } from '../format.js';
 
+// Un en-tête d'e-mail tient sur une seule ligne : un retour à la ligne dans le destinataire
+// ou le sujet permettrait d'en ajouter un autre (« Bcc: … ») le jour où ces mails partent par
+// SMTP. Les en-têtes sont donc aplatis ici, au point de sortie, comme le corps est échappé
+// à la construction du HTML. Le titre d'un événement peut contenir n'importe quoi ; ce qui
+// compte est qu'il ne puisse rien signifier dans un en-tête.
+const header = (value) =>
+  String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 // Les mails sont écrits dans la boîte d'envoi (table emails) dans la même transaction
 // que l'action qui les déclenche : pas de mail « billet » si le paiement est annulé.
 export function sendMail({ to, subject, html, kind }) {
-  run('INSERT INTO emails (to_email, subject, html, kind, created_at) VALUES (?, ?, ?, ?, ?)', to, subject, html, kind, clock.nowIso());
+  run(
+    'INSERT INTO emails (to_email, subject, html, kind, created_at) VALUES (?, ?, ?, ?, ?)',
+    header(to),
+    header(subject),
+    html,
+    kind,
+    clock.nowIso(),
+  );
 }
 
 const L = (locale, fr, en) => (locale === 'en' ? en : fr);

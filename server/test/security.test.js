@@ -341,6 +341,36 @@ describe('Contrôle d’accès', () => {
   });
 });
 
+describe('Mails', () => {
+  test('titre d’événement avec retour à la ligne : aucun en-tête injecté dans le sujet', async () => {
+    const { email } = makeCollective('a');
+    const admin = anonymous();
+    await admin.login(email);
+    const created = await admin.request('/api/admin/events', {
+      method: 'POST',
+      body: {
+        title: 'Concert\r\nBcc: attaquant@exemple.test',
+        description: 'Ligne un.\nLigne deux.',
+        venue: 'Salle',
+        startsAt: new Date(Date.now() + 86_400_000).toISOString(),
+        ticketTypes: [{ name: 'Invitation', priceCents: 0, quota: 5 }],
+      },
+    });
+    await admin.request(`/api/admin/events/${created.body.id}/publish`, { method: 'POST' });
+    // Place gratuite : les billets et leur mail sont émis immédiatement.
+    const order = await anonymous().request(`/api/events/${created.body.id}/orders`, {
+      method: 'POST',
+      body: { buyerName: 'Z', buyerEmail: 'z@exemple.test', items: [{ ticketTypeId: created.body.ticketTypes[0].id, quantity: 1 }] },
+    });
+    assert.equal(order.status, 201);
+    const mail = get("SELECT to_email, subject FROM emails WHERE kind = 'tickets' ORDER BY id DESC LIMIT 1");
+    assert.doesNotMatch(mail.subject, /[\r\n]/);
+    assert.doesNotMatch(mail.to_email, /[\r\n]/);
+    // La description garde ses retours à la ligne : elle est affichée en « white-space: pre-line ».
+    assert.equal(created.body.description, 'Ligne un.\nLigne deux.');
+  });
+});
+
 describe('En-têtes HTTP', () => {
   test('CSP stricte, anti-clickjacking, pas de Referer, pas de X-Powered-By', async () => {
     const res = await anonymous().request('/api/collectives');
