@@ -96,6 +96,25 @@ describe('Double soumission', () => {
     assert.equal(get('SELECT COUNT(*) AS n FROM orders').n, 1);
     assert.equal(get('SELECT held FROM ticket_types WHERE id = ?', typeIds[0]).held, 2);
   });
+
+  test('même clé rejouée par un autre acheteur : refusée, le jeton de la commande ne fuite pas', async () => {
+    const { cid } = makeCollective('a');
+    const { eventId, typeIds } = makeEvent(cid, [10]);
+    const order = (buyerEmail) =>
+      anonymous().request(`/api/events/${eventId}/orders`, {
+        method: 'POST',
+        headers: { 'idempotency-key': 'cle-de-test-0123456789' },
+        body: { buyerName: 'A', buyerEmail, items: [{ ticketTypeId: typeIds[0], quantity: 1 }] },
+      });
+    const victim = await order('victime@exemple.test');
+    const attacker = await order('attaquant@exemple.test');
+    assert.equal(attacker.status, 409);
+    assert.equal(attacker.body.error, 'idempotency_conflict');
+    assert.equal(attacker.body.token, undefined);
+    // La commande de la victime reste unique, intacte et accessible à elle seule.
+    assert.equal(get('SELECT COUNT(*) AS n FROM orders').n, 1);
+    assert.equal((await anonymous().request(`/api/orders/${victim.body.token}`)).status, 200);
+  });
 });
 
 describe('Validation des champs', () => {

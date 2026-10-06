@@ -62,10 +62,15 @@ export function createOrder(eventId, input, idempotencyKey = null) {
 
   return tx(() => {
     // Même clé d'idempotence (double clic, nouvel essai après coupure) : même commande.
+    // La clé voyage en en-tête HTTP et n'est pas un secret : le jeton de la commande n'est
+    // renvoyé que si la requête vient du même acheteur, pour le même événement. Sinon la clé
+    // suffirait à lire la commande d'autrui (nom, e-mail, codes de billets) et à l'annuler.
     if (idempotencyKey) {
       const existing = get('SELECT * FROM orders WHERE idempotency_key = ?', idempotencyKey);
       if (existing) {
-        if (existing.event_id !== event.id) throw conflict('idempotency_conflict', 'Requête déjà utilisée.');
+        if (existing.event_id !== event.id || existing.buyer_email !== buyerEmail) {
+          throw conflict('idempotency_conflict', 'Requête déjà utilisée.');
+        }
         return { order: existing, replayed: true };
       }
     }
