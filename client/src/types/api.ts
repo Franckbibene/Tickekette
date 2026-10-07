@@ -77,7 +77,6 @@ export interface Ticket {
 }
 
 export interface Order {
-  token: string;
   reference: string;
   status: OrderStatus;
   buyerName: string;
@@ -312,6 +311,8 @@ export interface Manifest {
   ticketTypes: { id: number; name: string }[];
   tickets: ManifestTicket[];
   generatedAt: string;
+  offlineGrant: string;
+  offlineExpiresAt: string;
 }
 
 export type ScanOutcome = 'ok' | 'duplicate' | 'invalid' | 'cancelled' | 'wrong_event';

@@ -69,26 +69,38 @@ export function useOfflineScanner(eventId: number) {
     if (err instanceof ApiError && err.isNetworkError) setOnline(false);
   }
 
-  async function downloadManifest() {
+  async function downloadManifest(pending = queue) {
     try {
       const fresh = await scanApi.manifest(eventId);
       setLoadError(null);
       // Les entrées validées ici mais pas encore synchronisées restent marquées.
-      const withPending = queue.reduce((m, s) => markEntered(m, s.code, s.scannedAt, s.gate), fresh);
+      const withPending = pending.reduce((m, s) => markEntered(m, s.code, s.scannedAt, s.gate), fresh);
       setManifest(withPending);
       setOnline(true);
+      return withPending;
     } catch (err) {
       setLoadError(toApiError(err).message);
       handleNetworkError(err);
+      return null;
     }
   }
 
-  async function sync() {
+  async function sync(manifestOverride?: Manifest | null) {
     if (syncing.current) return;
+    const activeManifest = manifestOverride ?? manifest;
+    if (!activeManifest || Date.now() >= Date.parse(activeManifest.offlineExpiresAt)) {
+      if (queue.length > 0) setLoadError('La liste hors ligne a expiré. Reconnectez-vous et rechargez-la avant de synchroniser.');
+      return;
+    }
     syncing.current = true;
     const batch = queue;
     try {
-      const res = await scanApi.sync(eventId, { deviceId, gate: settings.gate, scans: batch });
+      const res = await scanApi.sync(eventId, {
+        deviceId,
+        gate: settings.gate,
+        scans: batch,
+        offlineGrant: activeManifest.offlineGrant,
+      });
       const sent = new Set(batch.map((s) => s.clientScanId));
       setQueue((q) => q.filter((s) => !sent.has(s.clientScanId)));
       const newConflicts = res.results
@@ -204,8 +216,15 @@ export function useOfflineScanner(eventId: number) {
     void sync();
   });
   const onMount = useEffectEvent(() => {
-    if (!manifest) void downloadManifest();
-    void sync();
+    void (async () => {
+      const manifestIsCurrent = manifest && Date.now() < Date.parse(manifest.offlineExpiresAt);
+      if (manifest && !manifestIsCurrent) {
+        setQueue([]);
+        setConflicts([]);
+      }
+      const activeManifest = manifestIsCurrent ? manifest : await downloadManifest([]);
+      await sync(activeManifest);
+    })();
   });
 
   // Démarrage (liste des billets + première synchro) puis synchro périodique et au retour du réseau.
@@ -233,6 +252,26 @@ export function useOfflineScanner(eventId: number) {
     return () => window.clearTimeout(timer);
   }, [feedback]);
 
+  // Les noms, références et codes sont supprimés dès l'expiration du droit hors
+  // ligne. La confidentialité prime sur la conservation d'une file non synchronisée
+  // au-delà de la fenêtre autorisée.
+  useEffect(() => {
+    if (!manifest) return undefined;
+    const expiresAt = Date.parse(manifest.offlineExpiresAt);
+    const clearExpiredData = () => {
+      setManifest(null);
+      setQueue([]);
+      setConflicts([]);
+      setLoadError('La liste hors ligne a expiré. Reconnectez-vous pour la recharger.');
+    };
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      clearExpiredData();
+      return undefined;
+    }
+    const timer = window.setTimeout(clearExpiredData, Math.min(expiresAt - Date.now(), 2_147_483_647));
+    return () => window.clearTimeout(timer);
+  }, [manifest, setConflicts, setManifest, setQueue]);
+
   return {
     manifest,
     pendingCount: queue.length,
@@ -252,8 +291,8 @@ export function useOfflineScanner(eventId: number) {
     handleScan,
     handleManual,
     refresh: async () => {
-      if (online) await sync();
-      await downloadManifest();
+      const fresh = await downloadManifest();
+      if (online && fresh) await sync(fresh);
     },
     downloadManifest,
   };

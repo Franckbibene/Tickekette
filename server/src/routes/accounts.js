@@ -1,7 +1,15 @@
 import { Router } from 'express';
 import { all, get, run, tx } from '../db.js';
 import { clock } from '../clock.js';
-import { closeSession, hashPassword, openSession, publicUser, requireAuth, verifyCredentials } from '../auth.js';
+import {
+  clearAuthenticationFailures,
+  closeSession,
+  hashPassword,
+  openSession,
+  publicUser,
+  requireAuth,
+  verifyCredentials,
+} from '../auth.js';
 import { HttpError, conflict } from '../errors.js';
 import { LIMITS, email, password, slug, text } from '../validation.js';
 
@@ -17,14 +25,19 @@ export function authRouter(limits) {
     // pour ne pas indiquer si un compte existe.
     const address = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase().slice(0, LIMITS.email) : '';
     const secret = typeof req.body?.password === 'string' ? req.body.password.slice(0, 200) : '';
-    const user = address && secret ? verifyCredentials(address, secret) : null;
-    if (!user) throw new HttpError(401, 'bad_credentials', 'E-mail ou mot de passe incorrect.');
+    const result = address && secret ? verifyCredentials(address, secret) : { user: null, blocked: false };
+    if (!result.user) {
+      if (result.blocked) throw new HttpError(429, 'login_delayed', 'Trop de tentatives. Réessayez plus tard.');
+      throw new HttpError(401, 'bad_credentials', 'E-mail ou mot de passe incorrect.');
+    }
+    const user = result.user;
+    clearAuthenticationFailures(user.id);
     openSession(res, user);
-    res.json(publicUser(user));
+    return res.json(publicUser(user));
   });
 
-  router.post('/logout', (_req, res) => {
-    closeSession(res);
+  router.post('/logout', requireAuth(), (req, res) => {
+    closeSession(res, req.user.id);
     res.status(204).end();
   });
 

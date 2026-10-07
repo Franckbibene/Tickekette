@@ -9,16 +9,21 @@ export interface FetchedOrder extends Order {
 }
 
 export const ordersApi = {
-  get: (token: string, signal?: AbortSignal) =>
-    request<Order>(`/orders/${encode(token)}`, { signal }).then((o) => ({
-      ...expectObject(o, ['token', 'status', 'event']),
+  access: (token: string, signal?: AbortSignal) =>
+    request<Order>('/orders/access', { method: 'POST', body: { token }, signal }).then((o) => ({
+      ...expectObject(o, ['reference', 'status', 'event']),
       receivedAt: Date.now(),
     })),
-  checkout: (token: string) =>
-    request<{ redirectUrl: string }>(`/orders/${encode(token)}/checkout`, { method: 'POST' }).then((r) => expectObject(r, ['redirectUrl'])),
-  cancel: (token: string) =>
-    request<Order>(`/orders/${encode(token)}/cancel`, { method: 'POST' }).then((o) => ({
-      ...expectObject(o, ['token', 'status']),
+  get: (signal?: AbortSignal) =>
+    request<Order>('/orders/current', { signal }).then((o) => ({
+      ...expectObject(o, ['reference', 'status', 'event']),
+      receivedAt: Date.now(),
+    })),
+  checkout: () => request<{ redirectUrl: string }>('/orders/checkout', { method: 'POST' }).then((r) => expectObject(r, ['redirectUrl'])),
+  requestCancellationCode: () => request<undefined>('/orders/cancel-code', { method: 'POST' }),
+  cancel: (confirmationCode?: string) =>
+    request<Order>('/orders/cancel', { method: 'POST', body: confirmationCode ? { confirmationCode } : {} }).then((o) => ({
+      ...expectObject(o, ['reference', 'status']),
       receivedAt: Date.now(),
     })),
 };

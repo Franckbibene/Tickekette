@@ -6,6 +6,7 @@ export interface SessionUser {
   email: string;
   role: 'superadmin' | 'admin' | 'controller';
   collective_id: number | null;
+  session_version: number;
 }
 
 declare global {
@@ -13,6 +14,7 @@ declare global {
     interface Request {
       // Renseigné par requireAuth() à partir du cookie de session vérifié.
       user?: SessionUser;
+      order?: any;
     }
   }
 }

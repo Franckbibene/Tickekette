@@ -24,7 +24,7 @@ export function CardPaymentPanel({ order, onChanged, onExpired }: Props) {
   const skew = Date.parse(order.serverNow) - order.receivedAt;
   const remaining = useCountdown(order.expiresAt, skew);
   const pay = useAsyncAction(async () => {
-    const { redirectUrl } = await ordersApi.checkout(order.token);
+    const { redirectUrl } = await ordersApi.checkout();
     // On ne suit qu'une redirection vers notre propre page de paiement (pas d'open redirect).
     const target = safeInternalPath(redirectUrl, '');
     if (!target.startsWith(PAYMENT_PAGE_PREFIX)) throw new ApiError(0, 'invalid_redirect', 'Paiement indisponible, réessayez.');
@@ -54,7 +54,7 @@ export function CardPaymentPanel({ order, onChanged, onExpired }: Props) {
       >
         {t('order.pay', { amount: formatMoney(order.totalCents, lang) })}
       </button>
-      <ReleaseSeatsButton token={order.token} onChanged={onChanged} />
+      <ReleaseSeatsButton onChanged={onChanged} />
     </section>
   );
 }

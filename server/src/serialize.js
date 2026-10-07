@@ -69,7 +69,6 @@ export function publicOrder(order) {
   const canCancel =
     order.status === 'pending' || (isPaid && event.status !== 'cancelled' && clock.now() <= deadline && tickets.every((t) => !t.enteredAt));
   return {
-    token: order.token,
     reference: order.reference,
     status: order.status,
     buyerName: order.buyer_name,

@@ -1,16 +1,25 @@
 import { run } from '../db.js';
 import { clock } from '../clock.js';
 import { config } from '../config.js';
+import { encryptData } from '../dataEncryption.js';
 import { cityOf, escapeHtml as e, formatDateTime, formatMoney } from '../format.js';
 
-// Les mails sont écrits dans la boîte d'envoi (table emails) dans la même transaction
-// que l'action qui les déclenche : pas de mail « billet » si le paiement est annulé.
+// Les mails sont écrits chiffrés dans la boîte d'envoi (table emails), dans la même
+// transaction que l'action : pas de mail « billet » si le paiement est annulé et aucun
+// lien de commande/code d'annulation stocké en clair.
 export function sendMail({ to, subject, html, kind }) {
-  run('INSERT INTO emails (to_email, subject, html, kind, created_at) VALUES (?, ?, ?, ?, ?)', to, subject, html, kind, clock.nowIso());
+  run(
+    'INSERT INTO emails (to_email, subject, html, kind, created_at) VALUES (?, ?, ?, ?, ?)',
+    to,
+    subject,
+    encryptData(html),
+    kind,
+    clock.nowIso(),
+  );
 }
 
 const L = (locale, fr, en) => (locale === 'en' ? en : fr);
-const orderUrl = (order) => `${config.publicUrl}/commande/${order.token}`;
+const orderUrl = (order) => `${config.publicUrl}/commande/${order.accessToken}`;
 
 function layout(locale, body) {
   return `<!doctype html><html lang="${locale}"><body style="margin:0;background:#f5f1ea;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#1f1a17">
@@ -162,6 +171,22 @@ export function mailWaitlistOfferExpired(order, event) {
       l,
       `<p>${L(l, 'Bonjour', 'Hello')} ${e(order.buyer_name)},</p>${eventBlock(event, l)}
 <p>${L(l, 'Le délai pour payer la place proposée est dépassé : elle a été proposée à la personne suivante.', 'The time to pay for the offered seat has passed: it has been offered to the next person.')}</p>`,
+    ),
+  });
+}
+
+export function mailCancellationCode(order, event, code) {
+  const l = order.locale;
+  sendMail({
+    to: order.buyer_email,
+    kind: 'cancellation_code',
+    subject: L(l, `Confirmer l’annulation ${order.reference}`, `Confirm cancellation ${order.reference}`),
+    html: layout(
+      l,
+      `<p>${L(l, 'Bonjour', 'Hello')} ${e(order.buyer_name)},</p>${eventBlock(event, l)}
+<p>${L(l, 'Code de confirmation pour annuler et rembourser la commande', 'Confirmation code to cancel and refund the order')} <strong>${e(order.reference)}</strong> :</p>
+<p style="font-size:28px;letter-spacing:6px;font-weight:800">${e(code)}</p>
+<p>${L(l, 'Ce code expire dans 10 minutes. Si vous n’avez pas demandé cette annulation, ignorez ce message.', 'This code expires in 10 minutes. If you did not request this cancellation, ignore this message.')}</p>`,
     ),
   });
 }
