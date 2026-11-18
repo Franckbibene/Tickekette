@@ -5,7 +5,7 @@ import cookieParser from 'cookie-parser';
 import express from 'express';
 import { config } from './config.js';
 import { apiNotFound, errorHandler } from './http/errorHandler.js';
-import { createRateLimiters, permissionsPolicy, requireCsrfHeader, securityHeaders } from './http/security.js';
+import { createRateLimiters, noStore, permissionsPolicy, requireCsrfHeader, securityHeaders } from './http/security.js';
 import { authRouter, platformRouter } from './routes/accounts.js';
 import { adminRouter } from './routes/admin/index.js';
 import { devRouter } from './routes/dev.js';
@@ -31,6 +31,7 @@ export function createApp({
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxy);
   app.use(securityHeaders, permissionsPolicy);
+  app.use('/api', noStore);
 
   // Le webhook lit le corps brut pour vérifier la signature : il passe avant express.json().
   // Il est authentifié par signature HMAC, pas par cookie : l'en-tête CSRF ne s'applique pas.

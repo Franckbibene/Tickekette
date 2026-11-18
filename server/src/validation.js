@@ -47,7 +47,8 @@ export function password(value) {
 }
 
 export function integer(value, { field, min, max }) {
-  const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
+  // On accepte un nombre, ou une chaîne d'entier décimal uniquement : pas de "1e3", "0x10" ni "1.5".
+  const n = typeof value === 'number' ? value : typeof value === 'string' && /^-?\d+$/.test(value.trim()) ? Number(value.trim()) : NaN;
   if (!Number.isInteger(n) || n < min || n > max) {
     throw badRequest('invalid_number', `${field} : nombre entier entre ${min} et ${max} attendu.`);
   }

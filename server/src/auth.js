@@ -5,7 +5,7 @@ import { config } from './config.js';
 import { get, run } from './db.js';
 import { forbidden, unauthorized } from './errors.js';
 
-const BCRYPT_ROUNDS = 10;
+const BCRYPT_ROUNDS = 12;
 const JWT_ALGORITHM = 'HS256';
 const JWT_ISSUER = 'tickekette';
 const SESSION_AUDIENCE = 'staff-session';
@@ -71,6 +71,20 @@ export function openSession(res, user) {
 export function closeSession(res, userId = null) {
   if (userId) run('UPDATE users SET session_version = session_version + 1 WHERE id = ?', userId);
   res.clearCookie(config.session.cookieName, cookieOptions());
+}
+
+// Déconnexion : invalide côté serveur tous les jetons de session en cours de l'utilisateur.
+// Lit le jeton du cookie (pas d'authentification préalable sur /logout) ; si le jeton est
+// déjà invalide ou absent, il n'y a rien à faire.
+export function revokeSession(req) {
+  const token = req.cookies?.[config.session.cookieName];
+  if (!token) return;
+  try {
+    const { uid } = /** @type {{ uid?: number }} */ (jwt.verify(token, config.jwtSecret, { algorithms: [JWT_ALGORITHM] }));
+    run('UPDATE users SET token_version = token_version + 1 WHERE id = ?', uid);
+  } catch {
+    /* jeton déjà expiré ou falsifié : rien à révoquer */
+  }
 }
 
 export function publicUser(user) {

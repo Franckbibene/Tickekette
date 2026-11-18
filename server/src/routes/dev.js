@@ -14,6 +14,19 @@ const EMAILS_SHOWN = 200;
 // les mails contiennent les liens secrets des commandes.
 export const devRouter = Router();
 
+// Ces outils exposent des données sensibles (liens secrets de commande) et manipulent
+// l'horloge globale, sans authentification. On les restreint donc au bouclage local :
+// la démo tourne sur la machine du développeur, mais une instance non-production exposée
+// sur le réseau ne révèle rien (réponse « introuvable », comme si la route n'existait pas).
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+devRouter.use((req, _res, next) => {
+  // On lit l'adresse TCP réelle (socket), pas req.ip : les en-têtes de proxy sont falsifiables.
+  // La présence d'un X-Forwarded-For signale un passage par un proxy (instance exposée) : on refuse.
+  const peer = req.socket?.remoteAddress ?? '';
+  if (!LOOPBACK.has(peer) || req.get('x-forwarded-for')) throw notFound();
+  next();
+});
+
 devRouter.get('/emails', (_req, res) => {
   res.json(all('SELECT id, to_email AS "to", subject, kind, created_at AS createdAt FROM emails ORDER BY id DESC LIMIT ?', EMAILS_SHOWN));
 });

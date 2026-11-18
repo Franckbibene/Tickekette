@@ -43,6 +43,13 @@ export function permissionsPolicy(_req, res, next) {
   next();
 }
 
+// Les réponses de l'API transportent des données personnelles (commandes, billets, QR codes,
+// chiffres de vente) : aucun cache (navigateur ou proxy partagé) ne doit les conserver.
+export function noStore(_req, res, next) {
+  res.set('Cache-Control', 'no-store');
+  next();
+}
+
 // Protection CSRF en complément du cookie SameSite=Strict : toute requête qui modifie
 // des données doit porter un en-tête personnalisé. Un site tiers ne peut pas l'ajouter
 // sans requête CORS préalable, que ce serveur n'autorise pas (aucun en-tête CORS émis).
