@@ -90,7 +90,7 @@ export function publicRouter(limits) {
     res.json({ redirectUrl: `/paiement-simule/${id}` });
   });
 
-  router.post('/orders/:token/cancel', (req, res) => {
+  router.post('/orders/:token/cancel', limits.orders, (req, res) => {
     const order = orderByToken(req.params.token);
     cancelOrderByBuyer(order.token);
     res.json(publicOrder(orderByToken(order.token)));

@@ -2,10 +2,10 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { config } from './config.js';
-import { get } from './db.js';
+import { get, run } from './db.js';
 import { forbidden, unauthorized } from './errors.js';
 
-const BCRYPT_ROUNDS = 10;
+const BCRYPT_ROUNDS = 12;
 const JWT_ALGORITHM = 'HS256';
 
 export const hashPassword = (password) => bcrypt.hashSync(password, BCRYPT_ROUNDS);
@@ -31,7 +31,9 @@ const cookieOptions = () => ({
 });
 
 export function openSession(res, user) {
-  const token = jwt.sign({ uid: user.id }, config.jwtSecret, {
+  // La version de jeton est embarquée dans la session : une déconnexion l'incrémente en base,
+  // ce qui rend inacceptables les jetons déjà émis (vraie invalidation côté serveur).
+  const token = jwt.sign({ uid: user.id, tv: user.token_version ?? 0 }, config.jwtSecret, {
     algorithm: JWT_ALGORITHM,
     expiresIn: Math.floor(config.session.maxAgeMs / 1000),
   });
@@ -40,6 +42,20 @@ export function openSession(res, user) {
 
 export function closeSession(res) {
   res.clearCookie(config.session.cookieName, cookieOptions());
+}
+
+// Déconnexion : invalide côté serveur tous les jetons de session en cours de l'utilisateur.
+// Lit le jeton du cookie (pas d'authentification préalable sur /logout) ; si le jeton est
+// déjà invalide ou absent, il n'y a rien à faire.
+export function revokeSession(req) {
+  const token = req.cookies?.[config.session.cookieName];
+  if (!token) return;
+  try {
+    const { uid } = /** @type {{ uid?: number }} */ (jwt.verify(token, config.jwtSecret, { algorithms: [JWT_ALGORITHM] }));
+    run('UPDATE users SET token_version = token_version + 1 WHERE id = ?', uid);
+  } catch {
+    /* jeton déjà expiré ou falsifié : rien à révoquer */
+  }
 }
 
 export function publicUser(user) {
@@ -54,15 +70,17 @@ export function requireAuth(...roles) {
   return (req, _res, next) => {
     const token = req.cookies?.[config.session.cookieName];
     if (!token) throw unauthorized();
-    /** @type {{ uid?: number }} */
+    /** @type {{ uid?: number, tv?: number }} */
     let payload;
     try {
-      payload = /** @type {{ uid?: number }} */ (jwt.verify(token, config.jwtSecret, { algorithms: [JWT_ALGORITHM] }));
+      payload = /** @type {{ uid?: number, tv?: number }} */ (jwt.verify(token, config.jwtSecret, { algorithms: [JWT_ALGORITHM] }));
     } catch {
       throw unauthorized('Session expirée, reconnectez-vous.');
     }
-    const user = get('SELECT id, name, email, role, collective_id FROM users WHERE id = ?', payload.uid);
+    const user = get('SELECT id, name, email, role, collective_id, token_version FROM users WHERE id = ?', payload.uid);
     if (!user) throw unauthorized('Session expirée, reconnectez-vous.');
+    // Jeton d'une session révoquée (déconnexion) : refusé.
+    if ((payload.tv ?? 0) !== user.token_version) throw unauthorized('Session expirée, reconnectez-vous.');
     if (roles.length && !roles.includes(user.role)) throw forbidden("Vous n'avez pas accès à cette page.");
     req.user = user;
     next();

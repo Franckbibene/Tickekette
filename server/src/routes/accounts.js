@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { all, get, run, tx } from '../db.js';
 import { clock } from '../clock.js';
-import { closeSession, hashPassword, openSession, publicUser, requireAuth, verifyCredentials } from '../auth.js';
+import { closeSession, hashPassword, openSession, publicUser, requireAuth, revokeSession, verifyCredentials } from '../auth.js';
 import { HttpError, conflict } from '../errors.js';
 import { LIMITS, email, password, slug, text } from '../validation.js';
 
@@ -23,7 +23,8 @@ export function authRouter(limits) {
     res.json(publicUser(user));
   });
 
-  router.post('/logout', (_req, res) => {
+  router.post('/logout', (req, res) => {
+    revokeSession(req);
     closeSession(res);
     res.status(204).end();
   });

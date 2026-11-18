@@ -1,7 +1,7 @@
 // Toutes les dates sont stockées en UTC au format ISO 8601 (comparables comme des chaînes).
 // Les garanties critiques du cahier des charges sont aussi posées au niveau de la base :
 // - CHECK (sold + held <= quota)            -> aucune survente possible (5.2)
-// - UNIQUE (provider, provider_payment_id)  -> un paiement = une seule commande (5.3)
+// - UNIQUE (provider, provider_payment_id, kind) -> un paiement/remboursement enregistré une seule fois (5.3)
 // - webhook_events.id PRIMARY KEY            -> une notification traitée une seule fois (5.3)
 // - scans.client_scan_id UNIQUE              -> synchronisation hors ligne rejouable (5.7)
 // - orders.idempotency_key UNIQUE            -> un double clic ne crée pas deux commandes (5.2)
@@ -189,4 +189,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_idempotency ON orders(idempotency_ke
 `;
 
 // Colonnes ajoutées après la première version : appliquées aux bases existantes.
-export const MIGRATIONS = [{ table: 'orders', column: 'idempotency_key', definition: 'TEXT' }];
+export const MIGRATIONS = [
+  { table: 'orders', column: 'idempotency_key', definition: 'TEXT' },
+  // Incrémenté à la déconnexion : invalide côté serveur les jetons de session déjà émis.
+  { table: 'users', column: 'token_version', definition: 'INTEGER NOT NULL DEFAULT 0' },
+];

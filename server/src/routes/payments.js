@@ -8,6 +8,8 @@ import { recordPayment } from '../services/payments.js';
 import { routeToken } from '../validation.js';
 
 const WEBHOOK_BODY_LIMIT = '100kb';
+// Garde-fou sur les montants d'une notification (10 M€) : un montant hors bornes est ignoré.
+const MAX_AMOUNT_CENTS = 1_000_000_00;
 
 const sign = (body) => crypto.createHmac('sha256', config.webhookSecret).update(body).digest('hex');
 
@@ -26,13 +28,14 @@ function parsePaymentEvent(rawBody) {
   }
   const data = event?.data ?? {};
   if (typeof event?.id !== 'string' || typeof event?.type !== 'string') throw badRequest('invalid_event', 'Notification invalide.');
+  const inBounds = (n) => Number.isInteger(n) && n >= 0 && n <= MAX_AMOUNT_CENTS;
   return {
     id: event.id.slice(0, 100),
     type: event.type.slice(0, 50),
     paymentId: typeof data.paymentId === 'string' ? data.paymentId.slice(0, 100) : null,
     orderToken: typeof data.orderToken === 'string' ? data.orderToken : null,
-    amountCents: Number.isInteger(data.amountCents) ? data.amountCents : null,
-    feeCents: Number.isInteger(data.feeCents) ? data.feeCents : 0,
+    amountCents: inBounds(data.amountCents) ? data.amountCents : null,
+    feeCents: inBounds(data.feeCents) ? data.feeCents : 0,
   };
 }
 

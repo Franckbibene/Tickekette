@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const env = process.env;
@@ -5,12 +6,6 @@ const isProduction = env.NODE_ENV === 'production';
 const isTest = env.NODE_ENV === 'test';
 const dataDir = fileURLToPath(new URL('../data/', import.meta.url));
 
-// Valeurs de développement uniquement : refusées au démarrage en production.
-const DEV_SECRETS = {
-  JWT_SECRET: 'dev-only-jwt-secret-not-for-production-use',
-  TICKET_SECRET: 'dev-only-ticket-secret-not-for-production-use',
-  WEBHOOK_SECRET: 'dev-only-webhook-secret-not-for-production-use',
-};
 const MIN_SECRET_LENGTH = 32;
 
 function secret(name) {
@@ -19,7 +14,11 @@ function secret(name) {
   if (isProduction) {
     throw new Error(`${name} doit être défini (${MIN_SECRET_LENGTH} caractères minimum) en production.`);
   }
-  return DEV_SECRETS[name];
+  // Hors production : AUCUN secret codé en dur (il serait public dans le dépôt et permettrait
+  // de forger sessions, QR codes et notifications de paiement). On génère un secret aléatoire
+  // par processus ; définir la variable d'environnement (voir .env.example) pour le garder stable
+  // entre deux redémarrages.
+  return crypto.randomBytes(32).toString('hex');
 }
 
 function flag(name, defaultValue) {

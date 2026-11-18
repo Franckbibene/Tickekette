@@ -6,7 +6,10 @@ import { cityOf, escapeHtml as e, formatDateTime, formatMoney } from '../format.
 // Les mails sont écrits dans la boîte d'envoi (table emails) dans la même transaction
 // que l'action qui les déclenche : pas de mail « billet » si le paiement est annulé.
 export function sendMail({ to, subject, html, kind }) {
-  run('INSERT INTO emails (to_email, subject, html, kind, created_at) VALUES (?, ?, ?, ?, ?)', to, subject, html, kind, clock.nowIso());
+  // Le sujet contient des données saisies (titre d'événement…) : on retire tout retour à la ligne
+  // pour empêcher l'injection d'en-têtes si un vrai serveur SMTP est branché en production.
+  const safeSubject = String(subject).replace(/[\r\n]+/g, ' ').slice(0, 300);
+  run('INSERT INTO emails (to_email, subject, html, kind, created_at) VALUES (?, ?, ?, ?, ?)', to, safeSubject, html, kind, clock.nowIso());
 }
 
 const L = (locale, fr, en) => (locale === 'en' ? en : fr);
