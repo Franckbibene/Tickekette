@@ -2,23 +2,29 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const env = process.env;
-const isProduction = env.NODE_ENV === 'production';
-const isTest = env.NODE_ENV === 'test';
+const APP_MODES = new Set(['production', 'demo', 'test']);
+const appMode = env.APP_MODE;
+if (!APP_MODES.has(appMode)) {
+  throw new Error('APP_MODE doit être explicitement défini à production, demo ou test.');
+}
+const isProduction = appMode === 'production';
+const isDemo = appMode === 'demo';
+const isTest = appMode === 'test';
 const dataDir = fileURLToPath(new URL('../data/', import.meta.url));
 
 const MIN_SECRET_LENGTH = 32;
+const ephemeralSecrets = new Map();
 
 function secret(name) {
   const value = env[name];
   if (value && value.length >= MIN_SECRET_LENGTH) return value;
-  if (isProduction) {
-    throw new Error(`${name} doit être défini (${MIN_SECRET_LENGTH} caractères minimum) en production.`);
+  if (isProduction || isDemo) {
+    throw new Error(`${name} doit être défini (${MIN_SECRET_LENGTH} caractères minimum) en mode ${appMode}.`);
   }
-  // Hors production : AUCUN secret codé en dur (il serait public dans le dépôt et permettrait
-  // de forger sessions, QR codes et notifications de paiement). On génère un secret aléatoire
-  // par processus ; définir la variable d'environnement (voir .env.example) pour le garder stable
-  // entre deux redémarrages.
-  return crypto.randomBytes(32).toString('hex');
+  // Les tests isolés utilisent une valeur aléatoire propre au processus, jamais un
+  // secret public forgeable. Les modes persistants exigent des secrets explicites.
+  if (!ephemeralSecrets.has(name)) ephemeralSecrets.set(name, crypto.randomBytes(32).toString('hex'));
+  return ephemeralSecrets.get(name);
 }
 
 function flag(name, defaultValue) {
@@ -26,41 +32,78 @@ function flag(name, defaultValue) {
   return env[name] === 'true';
 }
 
-const paymentProvider = env.PAYMENT_PROVIDER ?? (isProduction ? 'none' : 'mock');
-if (isProduction && paymentProvider === 'mock') {
-  throw new Error('Le prestataire de paiement simulé ne peut pas être utilisé en production.');
+const paymentProvider = env.PAYMENT_PROVIDER ?? 'none';
+if (!['none', 'mock'].includes(paymentProvider)) throw new Error('PAYMENT_PROVIDER doit valoir none ou mock.');
+if (paymentProvider === 'mock' && !isDemo && !isTest) throw new Error('Le prestataire simulé est réservé au mode demo/test.');
+
+const devTools = flag('ENABLE_DEV_TOOLS', false);
+const demoData = flag('ALLOW_DEMO_DATA', false);
+if ((devTools || demoData) && !isDemo && !isTest) throw new Error('Les fonctions de démonstration sont réservées au mode demo/test.');
+
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
+const LOOPBACK_URL_HOSTS = new Set([...LOOPBACK_HOSTS, '[::1]']);
+const host = env.HOST || '127.0.0.1';
+if (!LOOPBACK_HOSTS.has(host)) {
+  throw new Error('Cette application locale doit écouter uniquement sur localhost/loopback.');
 }
 
-const publicUrl = env.PUBLIC_URL ?? 'http://localhost:5173';
-if (isProduction && !publicUrl.startsWith('https://')) {
-  throw new Error('PUBLIC_URL doit être en HTTPS en production.');
+function localUrl(name, value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${name} doit être une URL locale http(s) valide.`);
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || !LOOPBACK_URL_HOSTS.has(parsed.hostname) || parsed.username || parsed.password) {
+    throw new Error(`${name} doit cibler exclusivement localhost/loopback en http(s).`);
+  }
+  return parsed.origin;
 }
+
+const publicUrl = localUrl('PUBLIC_URL', env.PUBLIC_URL ?? 'http://localhost:5173');
+const apiUrl = env.API_URL ? localUrl('API_URL', env.API_URL) : '';
+if (env.TRUST_PROXY !== undefined && env.TRUST_PROXY !== '0') throw new Error('TRUST_PROXY doit rester à 0 pour une application locale.');
 
 // Les valeurs marquées (H…) sont des hypothèses du cahier des charges, voir HYPOTHESES.md.
 export const config = {
+  appMode,
   isProduction,
+  isDemo,
   isTest,
   // En dev, PORT est souvent déjà pris par le front : l'API a sa propre variable.
   port: Number(env.API_PORT) || (isProduction && Number(env.PORT)) || 3001,
-  // Nombre de proxys devant l'application (nécessaire pour identifier l'IP réelle).
-  trustProxy: Number(env.TRUST_PROXY) || 0,
+  host,
+  // Aucun proxy n'est autorisé dans le modèle local mono-instance.
+  trustProxy: 0,
   dataDir,
   dbFile: env.DB_FILE || `${dataDir}tickekette.db`,
   jwtSecret: secret('JWT_SECRET'),
   ticketSecret: secret('TICKET_SECRET'),
   webhookSecret: secret('WEBHOOK_SECRET'),
+  dataEncryptionKey: secret('DATA_ENCRYPTION_KEY'),
   // URL du front, utilisée dans les liens des mails.
   publicUrl,
+  secureCookies: publicUrl.startsWith('https://'),
   // URL de l'API, utilisée par le prestataire simulé pour envoyer ses notifications.
-  apiUrl: env.API_URL || '',
-  // 'mock' : prestataire simulé (démo). 'none' : paiement carte indisponible.
+  apiUrl,
+  // 'mock' : prestataire simulé, uniquement en mode demo/test. 'none' : indisponible.
   paymentProvider,
-  // Boîte mail de démo et horloge accélérable : jamais en production.
-  devTools: !isProduction && flag('ENABLE_DEV_TOOLS', true),
+  devTools,
+  demoData,
 
   session: {
     cookieName: 'tkk_session',
     maxAgeMs: 12 * 3_600_000,
+  },
+
+  orderAccess: {
+    cookieName: 'tkk_order_access',
+    maxAgeMs: 2 * 3_600_000,
+  },
+
+  offline: {
+    // Autorisation hors ligne courte : limite l'usage d'un terminal ou compte révoqué.
+    grantMinutes: 8 * 60,
   },
 
   // (H3) Délai de paiement d'une réservation selon le moyen de paiement.

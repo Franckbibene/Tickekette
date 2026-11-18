@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import express, { Router } from 'express';
+import { z } from 'zod';
 import { get, run, tx } from '../db.js';
 import { clock } from '../clock.js';
 import { config } from '../config.js';
@@ -8,8 +9,26 @@ import { recordPayment } from '../services/payments.js';
 import { routeToken } from '../validation.js';
 
 const WEBHOOK_BODY_LIMIT = '100kb';
-// Garde-fou sur les montants d'une notification (10 M€) : un montant hors bornes est ignoré.
-const MAX_AMOUNT_CENTS = 1_000_000_00;
+const WEBHOOK_MAX_AGE_MS = 5 * 60_000;
+const MAX_PAYMENT_CENTS = 500_000_000;
+const PROVIDER_ID_RE = /^[A-Za-z0-9_-]{3,100}$/;
+
+const PaymentEvent = z
+  .object({
+    id: z.string().regex(PROVIDER_ID_RE),
+    type: z.literal('payment.succeeded'),
+    createdAt: z.iso.datetime({ offset: true }),
+    data: z
+      .object({
+        paymentId: z.string().regex(PROVIDER_ID_RE),
+        orderId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        amountCents: z.number().int().positive().max(MAX_PAYMENT_CENTS),
+        feeCents: z.number().int().nonnegative().max(MAX_PAYMENT_CENTS),
+      })
+      .strict()
+      .refine((data) => data.feeCents <= data.amountCents, { message: 'Fee cannot exceed payment amount.' }),
+  })
+  .strict();
 
 const sign = (body) => crypto.createHmac('sha256', config.webhookSecret).update(body).digest('hex');
 
@@ -20,23 +39,17 @@ function hasValidSignature(rawBody, received) {
 }
 
 function parsePaymentEvent(rawBody) {
-  let event;
+  let raw;
   try {
-    event = JSON.parse(rawBody.toString('utf8'));
+    raw = JSON.parse(rawBody.toString('utf8'));
   } catch {
     throw badRequest('invalid_json', 'Notification illisible.');
   }
-  const data = event?.data ?? {};
-  if (typeof event?.id !== 'string' || typeof event?.type !== 'string') throw badRequest('invalid_event', 'Notification invalide.');
-  const inBounds = (n) => Number.isInteger(n) && n >= 0 && n <= MAX_AMOUNT_CENTS;
-  return {
-    id: event.id.slice(0, 100),
-    type: event.type.slice(0, 50),
-    paymentId: typeof data.paymentId === 'string' ? data.paymentId.slice(0, 100) : null,
-    orderToken: typeof data.orderToken === 'string' ? data.orderToken : null,
-    amountCents: inBounds(data.amountCents) ? data.amountCents : null,
-    feeCents: inBounds(data.feeCents) ? data.feeCents : 0,
-  };
+  const parsed = PaymentEvent.safeParse(raw);
+  if (!parsed.success) throw badRequest('invalid_event', 'Notification invalide.');
+  const created = Date.parse(parsed.data.createdAt);
+  if (Math.abs(Date.now() - created) > WEBHOOK_MAX_AGE_MS) throw badRequest('stale_event', 'Notification expirée.');
+  return parsed.data;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,14 +74,13 @@ webhookRouter.post('/payment', express.raw({ type: '*/*', limit: WEBHOOK_BODY_LI
       clock.nowIso(),
     );
     if (inserted.changes === 0) return 'duplicate_notification';
-    if (event.type !== 'payment.succeeded' || !event.paymentId || event.amountCents === null) return 'ignored';
-    const order = event.orderToken ? get('SELECT id FROM orders WHERE token = ?', event.orderToken) : null;
+    const order = get('SELECT id FROM orders WHERE id = ?', event.data.orderId);
     if (!order) return 'unknown_order';
     const { status } = recordPayment(order.id, {
       provider: 'mockpay',
-      providerPaymentId: event.paymentId,
-      amountCents: event.amountCents,
-      feeCents: event.feeCents,
+      providerPaymentId: event.data.paymentId,
+      amountCents: event.data.amountCents,
+      feeCents: event.data.feeCents,
     });
     run('UPDATE webhook_events SET result = ? WHERE id = ?', status, event.id);
     return status;
@@ -91,7 +103,7 @@ const sessionById = (id) => {
 
 mockProviderRouter.get('/sessions/:id', (req, res) => {
   const s = sessionById(req.params.id);
-  res.json({ id: s.id, label: s.label, amountCents: s.amount_cents, status: s.status, returnUrl: `/commande/${s.order_token}` });
+  res.json({ id: s.id, label: s.label, amountCents: s.amount_cents, status: s.status, returnUrl: '/commande' });
 });
 
 mockProviderRouter.post('/sessions/:id/pay', async (req, res) => {
@@ -109,7 +121,8 @@ mockProviderRouter.post('/sessions/:id/pay', async (req, res) => {
   const body = JSON.stringify({
     id: `evt_${crypto.randomBytes(10).toString('hex')}`,
     type: 'payment.succeeded',
-    data: { paymentId, orderToken: session.order_token, amountCents: session.amount_cents, feeCents },
+    createdAt: new Date().toISOString(),
+    data: { paymentId, orderId: session.order_id, amountCents: session.amount_cents, feeCents },
   });
   const deliver = () =>
     fetch(`${config.apiUrl}/api/webhooks/payment`, {
@@ -126,5 +139,5 @@ mockProviderRouter.post('/sessions/:id/pay', async (req, res) => {
   // en même temps, pour démontrer qu'un seul lot de billets est émis.
   const copies = req.body?.duplicateNotification === false ? 1 : 2;
   const deliveries = await Promise.all(Array.from({ length: copies }, deliver));
-  res.json({ returnUrl: `/commande/${session.order_token}`, deliveries });
+  res.json({ returnUrl: '/commande', deliveries });
 });

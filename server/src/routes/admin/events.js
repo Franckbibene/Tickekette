@@ -46,6 +46,10 @@ function parseEventInput(body, { requireFuture }) {
   const rawTypes = Array.isArray(body.ticketTypes) ? body.ticketTypes : [];
   if (rawTypes.length === 0) throw badRequest('no_ticket_types', 'Ajoutez au moins un type de place.');
   if (rawTypes.length > LIMITS.ticketTypesMax) throw badRequest('too_many_types', `${LIMITS.ticketTypesMax} types de place maximum.`);
+  const ticketTypes = rawTypes.map((t, i) => parseTicketType(t, i, startsAt));
+  if (ticketTypes.reduce((total, type) => total + type.quota, 0) > LIMITS.eventCapacityMax) {
+    throw badRequest('capacity_too_high', `La capacité totale est limitée à ${LIMITS.eventCapacityMax} places.`);
+  }
   return {
     title,
     description: text(body.description, { field: 'Description', max: LIMITS.description, required: false }),
@@ -60,7 +64,7 @@ function parseEventInput(body, { requireFuture }) {
       max: LIMITS.cancelDeadlineHoursMax,
     }),
     maxPerOrder: integer(body.maxPerOrder ?? 6, { field: 'Places par commande', min: 1, max: LIMITS.maxPerOrderMax }),
-    ticketTypes: rawTypes.map((t, i) => parseTicketType(t, i, startsAt)),
+    ticketTypes,
   };
 }
 

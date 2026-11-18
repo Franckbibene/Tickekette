@@ -3,9 +3,9 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { useLang } from '../../hooks/useLang';
 import { ErrorMessage } from '../common/Feedback';
 
-export function ReleaseSeatsButton({ token, onChanged }: { token: string; onChanged: (order: FetchedOrder) => void }) {
+export function ReleaseSeatsButton({ onChanged }: { onChanged: (order: FetchedOrder) => void }) {
   const { t } = useLang();
-  const release = useAsyncAction(async () => onChanged(await ordersApi.cancel(token)));
+  const release = useAsyncAction(async () => onChanged(await ordersApi.cancel()));
   return (
     <>
       <ErrorMessage error={release.error} />

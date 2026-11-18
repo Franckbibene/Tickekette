@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { all, get } from '../db.js';
 import { clock } from '../clock.js';
+import { decryptData } from '../dataEncryption.js';
 import { notFound } from '../errors.js';
 import { sweepExpired } from '../services/orders.js';
 import { integer, routeId } from '../validation.js';
@@ -36,7 +37,7 @@ devRouter.get('/emails/:id', (req, res) => {
     routeId(req.params.id),
   );
   if (!mail) throw notFound();
-  res.json(mail);
+  res.json({ ...mail, html: decryptData(mail.html) });
 });
 
 const clockState = () => ({ now: clock.nowIso(), offsetMinutes: Math.round(clock.offset() / 60_000) });

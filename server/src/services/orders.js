@@ -3,6 +3,7 @@ import { all, get, run, tx } from '../db.js';
 import { clock } from '../clock.js';
 import { config } from '../config.js';
 import { HttpError, badRequest, conflict, notFound } from '../errors.js';
+import { issueOrderAccessToken } from '../orderAccess.js';
 import { LIMITS, email, integer, text } from '../validation.js';
 import {
   cancelDeadline,
@@ -14,7 +15,7 @@ import {
   ticketTypesOf,
   transferAllowed,
 } from './inventory.js';
-import { mailExpired, mailTransferInstructions, mailWaitlistOfferExpired } from './mailer.js';
+import { mailCancellationCode, mailExpired, mailTransferInstructions, mailWaitlistOfferExpired } from './mailer.js';
 import { issueTickets, refund } from './payments.js';
 import { processWaitlist } from './waitlist.js';
 
@@ -66,7 +67,7 @@ export function createOrder(eventId, input, idempotencyKey = null) {
       const existing = get('SELECT * FROM orders WHERE idempotency_key = ?', idempotencyKey);
       if (existing) {
         if (existing.event_id !== event.id) throw conflict('idempotency_conflict', 'Requête déjà utilisée.');
-        return { order: existing, replayed: true };
+        return { order: { ...existing, accessToken: issueOrderAccessToken(existing, event) }, replayed: true };
       }
     }
     sweepExpired();
@@ -104,7 +105,7 @@ export function createOrderInTx({
     `INSERT INTO orders (token, reference, event_id, collective_id, buyer_name, buyer_email, locale,
        payment_method, status, total_cents, expires_at, waitlist_entry_id, idempotency_key, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
-    crypto.randomBytes(18).toString('base64url'),
+    `staging:${crypto.randomUUID()}`,
     randomReference(),
     event.id,
     event.collective_id,
@@ -119,6 +120,7 @@ export function createOrderInTx({
     now.toISOString(),
   );
   const orderId = Number(lastInsertRowid);
+  run('UPDATE orders SET token = ? WHERE id = ?', `retired:${orderId}`, orderId);
   for (const l of lines) {
     run(
       'INSERT INTO order_items (order_id, ticket_type_id, quantity, unit_price_cents, is_early) VALUES (?, ?, ?, ?, ?)',
@@ -129,7 +131,8 @@ export function createOrderInTx({
       l.isEarly,
     );
   }
-  const order = get('SELECT * FROM orders WHERE id = ?', orderId);
+  const storedOrder = get('SELECT * FROM orders WHERE id = ?', orderId);
+  const order = { ...storedOrder, accessToken: issueOrderAccessToken(storedOrder, event) };
 
   if (totalCents === 0) {
     // Place gratuite (invitation) : pas de paiement, billets émis immédiatement.
@@ -139,7 +142,7 @@ export function createOrderInTx({
     const collective = get('SELECT * FROM collectives WHERE id = ?', event.collective_id);
     mailTransferInstructions(order, event, collective);
   }
-  return get('SELECT * FROM orders WHERE id = ?', orderId);
+  return { ...get('SELECT * FROM orders WHERE id = ?', orderId), accessToken: order.accessToken };
 }
 
 function expireOrder(order) {
@@ -181,9 +184,38 @@ export function sweepExpired() {
   }
 }
 
-export function cancelOrderByBuyer(token) {
+const cancellationDigest = (orderId, code) => crypto.createHmac('sha256', config.ticketSecret).update(`${orderId}:${code}`).digest();
+
+export function requestCancellationCode(orderId) {
+  const order = get('SELECT * FROM orders WHERE id = ?', orderId);
+  if (!order) throw notFound('Commande introuvable.');
+  if (order.status !== 'paid') throw conflict('confirmation_not_required', 'Cette commande ne nécessite pas de code de confirmation.');
+  const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+  const expiresAt = new Date(clock.now().getTime() + 10 * 60_000).toISOString();
+  run(
+    'UPDATE orders SET cancel_code_hash = ?, cancel_code_expires_at = ? WHERE id = ?',
+    cancellationDigest(order.id, code).toString('hex'),
+    expiresAt,
+    order.id,
+  );
+  mailCancellationCode(order, getEvent(order.event_id), code);
+}
+
+function verifyCancellationCode(order, code) {
+  if (typeof code !== 'string' || !/^\d{6}$/.test(code) || !order.cancel_code_hash || clock.nowIso() > order.cancel_code_expires_at) {
+    throw new HttpError(403, 'invalid_confirmation', 'Code de confirmation invalide ou expiré.');
+  }
+  const expected = Buffer.from(order.cancel_code_hash, 'hex');
+  const received = cancellationDigest(order.id, code);
+  if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) {
+    throw new HttpError(403, 'invalid_confirmation', 'Code de confirmation invalide ou expiré.');
+  }
+  run('UPDATE orders SET cancel_code_hash = NULL, cancel_code_expires_at = NULL WHERE id = ?', order.id);
+}
+
+export function cancelOrderByBuyer(orderId, confirmationCode = null) {
   return tx(() => {
-    const order = get('SELECT * FROM orders WHERE token = ?', token);
+    const order = get('SELECT * FROM orders WHERE id = ?', orderId);
     if (!order) throw notFound('Commande introuvable.');
     const event = getEvent(order.event_id);
 
@@ -200,6 +232,9 @@ export function cancelOrderByBuyer(token) {
     if (clock.now() > cancelDeadline(event)) throw conflict('cancel_deadline_passed', 'Le délai d’annulation est dépassé.');
     const entered = get('SELECT COUNT(*) AS n FROM tickets WHERE order_id = ? AND entered_at IS NOT NULL', order.id);
     if (entered.n > 0) throw conflict('already_used', 'Un billet de cette commande a déjà été scanné.');
+    // Le code n'est consommé qu'après toutes les vérifications métier. Un refus ne
+    // force donc pas l'acheteur à demander inutilement un nouveau code.
+    verifyCancellationCode(order, confirmationCode);
 
     const touched = releaseSeats(order);
     run("UPDATE tickets SET status = 'cancelled' WHERE order_id = ?", order.id);

@@ -27,13 +27,14 @@ export const securityHeaders = helmet({
       baseUri: ["'self'"],
       formAction: ["'self'"],
       frameAncestors: ["'none'"],
-      ...(config.isProduction ? { upgradeInsecureRequests: [] } : {}),
+      ...(config.secureCookies ? { upgradeInsecureRequests: [] } : {}),
     },
   },
   // En-tête historique, cohérent avec frame-ancestors 'none'.
   xFrameOptions: { action: 'deny' },
   referrerPolicy: { policy: 'no-referrer' },
-  strictTransportSecurity: config.isProduction,
+  // HSTS n'a de sens que si l'instance locale est réellement servie en HTTPS.
+  strictTransportSecurity: config.secureCookies,
 });
 
 // Caméra autorisée pour le contrôle des billets, le reste est coupé.
@@ -61,25 +62,40 @@ export function requireCsrfHeader(req, _res, next) {
   throw new HttpError(403, 'csrf', 'Requête refusée.');
 }
 
-// Limites de débit par adresse IP : force brute sur la connexion, réservations
-// abusives destinées à bloquer tout le stock, inscriptions en masse.
-function limiter(windowMinutes, limit, message) {
+// Limites de débit par adresse IP, complétées par le délai progressif par compte
+// pour l'authentification et par des plafonds compte/appareil pour les scans.
+function limiter(windowMinutes, limit, message, keyGenerator) {
   return rateLimit({
     windowMs: windowMinutes * 60_000,
     limit,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
+    ...(keyGenerator ? { keyGenerator } : {}),
     handler: (_req, res) => res.status(429).json({ error: 'rate_limited', message }),
   });
 }
 
 export function createRateLimiters(enabled) {
   const pass = (_req, _res, next) => next();
-  if (!enabled) return { login: pass, orders: pass, waitlist: pass, checkout: pass };
+  if (!enabled) return { login: pass, orders: pass, waitlist: pass, checkout: pass, scansUser: pass, scansDevice: pass };
   return {
     login: limiter(15, 10, 'Trop de tentatives de connexion. Réessayez dans quelques minutes.'),
     orders: limiter(10, 20, 'Trop de réservations depuis cette connexion. Réessayez plus tard.'),
     waitlist: limiter(10, 10, 'Trop d’inscriptions depuis cette connexion. Réessayez plus tard.'),
     checkout: limiter(10, 30, 'Trop de tentatives de paiement. Réessayez plus tard.'),
+    // Deux plafonds complémentaires : changer artificiellement deviceId ne permet
+    // pas de contourner la limite globale du compte pour cet événement.
+    scansUser: limiter(
+      5,
+      120,
+      'Trop de synchronisations pour ce compte. Réessayez plus tard.',
+      (req) => `${req.user?.id ?? 'anonymous'}:${req.params.id ?? 'none'}`,
+    ),
+    scansDevice: limiter(
+      5,
+      40,
+      'Trop de synchronisations depuis cet appareil. Réessayez plus tard.',
+      (req) => `${req.user?.id ?? 'anonymous'}:${req.params.id ?? 'none'}:${String(req.body?.deviceId ?? '').slice(0, 64)}`,
+    ),
   };
 }

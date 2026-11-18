@@ -7,6 +7,8 @@ import { forbidden, unauthorized } from './errors.js';
 
 const BCRYPT_ROUNDS = 12;
 const JWT_ALGORITHM = 'HS256';
+const JWT_ISSUER = 'tickekette';
+const SESSION_AUDIENCE = 'staff-session';
 
 export const hashPassword = (password) => bcrypt.hashSync(password, BCRYPT_ROUNDS);
 
@@ -14,10 +16,31 @@ export const hashPassword = (password) => bcrypt.hashSync(password, BCRYPT_ROUND
 // (empêche de deviner quels comptes existent en mesurant le temps de réponse).
 const DUMMY_HASH = hashPassword(crypto.randomBytes(16).toString('hex'));
 
+function progressiveDelaySeconds(failures) {
+  if (failures < 5) return 0;
+  return Math.min(15 * 60, 30 * 2 ** Math.min(failures - 5, 5));
+}
+
 export function verifyCredentials(email, password) {
   const user = get('SELECT * FROM users WHERE email = ?', email);
   const ok = bcrypt.compareSync(password, user?.password_hash ?? DUMMY_HASH);
-  return ok && user ? user : null;
+  if (!ok || !user) {
+    if (user) recordAuthenticationFailure(user);
+    return { user: null, blocked: false };
+  }
+  const blocked = user.login_blocked_until && user.login_blocked_until > new Date().toISOString();
+  return { user: blocked ? null : user, blocked: Boolean(blocked) };
+}
+
+function recordAuthenticationFailure(user) {
+  const failures = (user.failed_login_count ?? 0) + 1;
+  const delay = progressiveDelaySeconds(failures);
+  const blockedUntil = delay ? new Date(Date.now() + delay * 1000).toISOString() : null;
+  run('UPDATE users SET failed_login_count = ?, login_blocked_until = ? WHERE id = ?', failures, blockedUntil, user.id);
+}
+
+export function clearAuthenticationFailures(userId) {
+  run('UPDATE users SET failed_login_count = 0, login_blocked_until = NULL WHERE id = ?', userId);
 }
 
 // La session est un JWT dans un cookie HttpOnly : inaccessible au JavaScript de la page,
@@ -25,22 +48,28 @@ export function verifyCredentials(email, password) {
 // depuis un autre site (CSRF), complété par l'en-tête obligatoire vérifié dans app.js.
 const cookieOptions = () => ({
   httpOnly: true,
-  secure: config.isProduction,
+  // Sur localhost HTTP, Secure empêcherait certains navigateurs d'envoyer le cookie.
+  // Le serveur étant lié à loopback, le trafic ne quitte jamais la machine.
+  secure: config.secureCookies,
   sameSite: 'strict',
   path: '/api',
 });
 
 export function openSession(res, user) {
-  // La version de jeton est embarquée dans la session : une déconnexion l'incrémente en base,
-  // ce qui rend inacceptables les jetons déjà émis (vraie invalidation côté serveur).
-  const token = jwt.sign({ uid: user.id, tv: user.token_version ?? 0 }, config.jwtSecret, {
+  run('UPDATE users SET session_version = session_version + 1 WHERE id = ?', user.id);
+  const current = get('SELECT session_version FROM users WHERE id = ?', user.id);
+  const token = jwt.sign({ uid: user.id, sv: current.session_version }, config.jwtSecret, {
     algorithm: JWT_ALGORITHM,
+    audience: SESSION_AUDIENCE,
+    issuer: JWT_ISSUER,
     expiresIn: Math.floor(config.session.maxAgeMs / 1000),
+    jwtid: crypto.randomUUID(),
   });
   res.cookie(config.session.cookieName, token, { ...cookieOptions(), maxAge: config.session.maxAgeMs });
 }
 
-export function closeSession(res) {
+export function closeSession(res, userId = null) {
+  if (userId) run('UPDATE users SET session_version = session_version + 1 WHERE id = ?', userId);
   res.clearCookie(config.session.cookieName, cookieOptions());
 }
 
@@ -70,17 +99,17 @@ export function requireAuth(...roles) {
   return (req, _res, next) => {
     const token = req.cookies?.[config.session.cookieName];
     if (!token) throw unauthorized();
-    /** @type {{ uid?: number, tv?: number }} */
+    /** @type {{ uid?: number, sv?: number }} */
     let payload;
     try {
-      payload = /** @type {{ uid?: number, tv?: number }} */ (jwt.verify(token, config.jwtSecret, { algorithms: [JWT_ALGORITHM] }));
+      payload = /** @type {{ uid?: number, sv?: number }} */ (
+        jwt.verify(token, config.jwtSecret, { algorithms: [JWT_ALGORITHM], audience: SESSION_AUDIENCE, issuer: JWT_ISSUER })
+      );
     } catch {
       throw unauthorized('Session expirée, reconnectez-vous.');
     }
-    const user = get('SELECT id, name, email, role, collective_id, token_version FROM users WHERE id = ?', payload.uid);
-    if (!user) throw unauthorized('Session expirée, reconnectez-vous.');
-    // Jeton d'une session révoquée (déconnexion) : refusé.
-    if ((payload.tv ?? 0) !== user.token_version) throw unauthorized('Session expirée, reconnectez-vous.');
+    const user = get('SELECT id, name, email, role, collective_id, session_version FROM users WHERE id = ?', payload.uid);
+    if (!user || user.session_version !== payload.sv) throw unauthorized('Session expirée, reconnectez-vous.');
     if (roles.length && !roles.includes(user.role)) throw forbidden("Vous n'avez pas accès à cette page.");
     req.user = user;
     next();

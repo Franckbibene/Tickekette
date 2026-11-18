@@ -1,15 +1,13 @@
-import fs from 'node:fs';
 import { createApp } from './app.js';
 import { config } from './config.js';
 import { get, initDb } from './db.js';
 import { seedDemo } from './seed.js';
 import { sweepExpired } from './services/orders.js';
 
-fs.mkdirSync(config.dataDir, { recursive: true });
 initDb(config.dbFile);
 
-// Données de démonstration : uniquement hors production, et seulement si la base est vide.
-if (!config.isProduction && !get('SELECT id FROM collectives LIMIT 1')) {
+// Données de démonstration : activation explicite et écoute locale par défaut.
+if (config.demoData && !get('SELECT id FROM collectives LIMIT 1')) {
   try {
     seedDemo();
     console.info('Base vide : données de démonstration créées.');
@@ -19,9 +17,10 @@ if (!config.isProduction && !get('SELECT id FROM collectives LIMIT 1')) {
   }
 }
 
-config.apiUrl ||= `http://localhost:${config.port}`;
-createApp().listen(config.port, () => {
-  console.info(`API Tickekette sur le port ${config.port}`);
+const apiHost = config.host === '::1' ? '[::1]' : config.host;
+config.apiUrl ||= `http://${apiHost}:${config.port}`;
+createApp().listen(config.port, config.host, () => {
+  console.info(`API Tickekette sur ${config.host}:${config.port}`);
 });
 
 // Libère régulièrement les réservations non payées expirées (5.2).

@@ -40,6 +40,7 @@ export function AppRoutes() {
           <Route path="c/:slug" element={<EventsListPage />} />
           <Route path="evenements/:id" element={<EventPage />} />
           <Route path="commande/:token" element={<OrderPage />} />
+          <Route path="commande" element={<OrderPage />} />
           <Route path="connexion" element={<LoginPage />} />
           {MailboxPage && <Route path="dev/mails" element={<MailboxPage />} />}
           <Route path="*" element={<NotFoundPage />} />

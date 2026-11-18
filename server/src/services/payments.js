@@ -1,6 +1,7 @@
 import { all, get, run, tx } from '../db.js';
 import { clock } from '../clock.js';
 import { confirmHeldSeats, getEvent, orderItemsOf, retakeSeats, salesOpen } from './inventory.js';
+import { issueOrderAccessToken } from '../orderAccess.js';
 import { mailRefund, mailTickets } from './mailer.js';
 import { newTicketCode } from './tickets.js';
 
@@ -30,7 +31,8 @@ export function issueTickets(order, event) {
      JOIN ticket_types tt ON tt.id = t.ticket_type_id WHERE t.order_id = ? ORDER BY t.id`,
     order.id,
   );
-  mailTickets(get('SELECT * FROM orders WHERE id = ?', order.id), event, tickets);
+  const paidOrder = get('SELECT * FROM orders WHERE id = ?', order.id);
+  mailTickets({ ...paidOrder, accessToken: issueOrderAccessToken(paidOrder, event) }, event, tickets);
 }
 
 // Enregistre un remboursement pour chaque paiement non encore remboursé de la commande.

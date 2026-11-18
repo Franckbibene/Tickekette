@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash  TEXT NOT NULL,
   name           TEXT NOT NULL,
   role           TEXT NOT NULL CHECK (role IN ('superadmin', 'admin', 'controller')),
+  session_version INTEGER NOT NULL DEFAULT 0,
+  failed_login_count INTEGER NOT NULL DEFAULT 0,
+  login_blocked_until TEXT,
   created_at     TEXT NOT NULL,
   CHECK ((role = 'superadmin') = (collective_id IS NULL))
 );
@@ -96,10 +99,21 @@ CREATE TABLE IF NOT EXISTS orders (
   refund_reason      TEXT,
   waitlist_entry_id  INTEGER REFERENCES waitlist_entries(id),
   idempotency_key    TEXT,
+  cancel_code_hash   TEXT,
+  cancel_code_expires_at TEXT,
   created_at         TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_orders_pending ON orders(status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_orders_event ON orders(event_id, status);
+
+-- Les liens de commande ne sont jamais stockés en clair : seul leur SHA-256 est conservé.
+CREATE TABLE IF NOT EXISTS order_access_tokens (
+  token_hash  TEXT PRIMARY KEY,
+  order_id    INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  expires_at  TEXT NOT NULL,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_order_access_order ON order_access_tokens(order_id, expires_at);
 
 CREATE TABLE IF NOT EXISTS order_items (
   id                INTEGER PRIMARY KEY,
@@ -132,7 +146,8 @@ CREATE TABLE IF NOT EXISTS webhook_events (
 -- Côté « prestataire de paiement simulé » (remplacé par Stripe & co en production).
 CREATE TABLE IF NOT EXISTS mock_provider_sessions (
   id            TEXT PRIMARY KEY,
-  order_token   TEXT NOT NULL,
+  order_token   TEXT,
+  order_id      INTEGER REFERENCES orders(id),
   amount_cents  INTEGER NOT NULL,
   label         TEXT NOT NULL,
   status        TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'paid')),
@@ -170,9 +185,10 @@ CREATE TABLE IF NOT EXISTS scans (
   result          TEXT NOT NULL CHECK (result IN ('ok', 'duplicate', 'invalid', 'cancelled', 'wrong_event'))
 );
 CREATE INDEX IF NOT EXISTS idx_scans_event ON scans(event_id, result);
+CREATE INDEX IF NOT EXISTS idx_scans_abuse ON scans(user_id, event_id, device_id, received_at, result);
 
--- Boîte d'envoi : les mails sont écrits dans la même transaction que l'action
--- qui les déclenche, puis consultables sur /dev/mails (ou envoyés par SMTP en production).
+-- Boîte d'envoi : les corps sont chiffrés par l'application et écrits dans la même
+-- transaction que l'action, puis déchiffrés par l'expéditeur (ou /dev en démo).
 CREATE TABLE IF NOT EXISTS emails (
   id          INTEGER PRIMARY KEY,
   to_email    TEXT NOT NULL,
@@ -191,6 +207,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_idempotency ON orders(idempotency_ke
 // Colonnes ajoutées après la première version : appliquées aux bases existantes.
 export const MIGRATIONS = [
   { table: 'orders', column: 'idempotency_key', definition: 'TEXT' },
-  // Incrémenté à la déconnexion : invalide côté serveur les jetons de session déjà émis.
-  { table: 'users', column: 'token_version', definition: 'INTEGER NOT NULL DEFAULT 0' },
+  { table: 'orders', column: 'cancel_code_hash', definition: 'TEXT' },
+  { table: 'orders', column: 'cancel_code_expires_at', definition: 'TEXT' },
+  { table: 'users', column: 'session_version', definition: 'INTEGER NOT NULL DEFAULT 0' },
+  { table: 'users', column: 'failed_login_count', definition: 'INTEGER NOT NULL DEFAULT 0' },
+  { table: 'users', column: 'login_blocked_until', definition: 'TEXT' },
+  { table: 'mock_provider_sessions', column: 'order_id', definition: 'INTEGER REFERENCES orders(id)' },
 ];

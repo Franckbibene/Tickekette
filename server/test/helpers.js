@@ -3,7 +3,8 @@ import { after, before, beforeEach } from 'node:test';
 import { createApp } from '../src/app.js';
 import { clock } from '../src/clock.js';
 import { config } from '../src/config.js';
-import { get, initDb, run } from '../src/db.js';
+import { decryptData } from '../src/dataEncryption.js';
+import { all, get, initDb, run } from '../src/db.js';
 import { hashPassword } from '../src/auth.js';
 
 export const PASSWORD = 'motdepasse-test';
@@ -13,10 +14,10 @@ export function setupServer(options = {}) {
   const ctx = { base: '' };
   let server;
   before(async () => {
-    server = createApp({ devTools: true, mockPayments: true, rateLimits: false, ...options }).listen(0);
+    server = createApp({ devTools: true, mockPayments: true, rateLimits: false, ...options }).listen(0, config.host);
     await new Promise((resolve) => server.once('listening', resolve));
     const { port } = /** @type {import('node:net').AddressInfo} */ (server.address());
-    ctx.base = `http://localhost:${port}`;
+    ctx.base = `http://${config.host === '::1' ? '[::1]' : config.host}:${port}`;
     config.apiUrl = ctx.base;
   });
   after(() => server.close());
@@ -28,7 +29,7 @@ export function setupServer(options = {}) {
 }
 
 export function createClient(ctx) {
-  let cookie = null;
+  const cookies = new Map();
   /**
    * @param {string} path
    * @param {{ method?: string, body?: unknown, headers?: Record<string, string>, csrf?: boolean }} [options]
@@ -39,13 +40,20 @@ export function createClient(ctx) {
       headers: {
         'content-type': 'application/json',
         ...(csrf ? { 'x-requested-with': 'tickekette' } : {}),
-        ...(cookie ? { cookie } : {}),
+        ...(cookies.size ? { cookie: [...cookies.values()].join('; ') } : {}),
         ...headers,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    const setCookie = res.headers.get('set-cookie');
-    if (setCookie) cookie = setCookie.split(';')[0];
+    const setCookies = res.headers.getSetCookie?.() ?? (res.headers.get('set-cookie') ? [res.headers.get('set-cookie')] : []);
+    for (const header of setCookies) {
+      const pair = header.split(';')[0];
+      const separator = pair.indexOf('=');
+      if (separator < 1) continue;
+      const name = pair.slice(0, separator);
+      if (/Max-Age=0/i.test(header) || pair.slice(separator + 1) === '') cookies.delete(name);
+      else cookies.set(name, pair);
+    }
     const text = await res.text();
     let json = null;
     try {
@@ -53,11 +61,14 @@ export function createClient(ctx) {
     } catch {
       json = text;
     }
-    return { status: res.status, body: json, headers: res.headers, setCookie };
+    return { status: res.status, body: json, headers: res.headers, setCookie: setCookies.join(', ') };
+  }
+  function login(email, password = PASSWORD) {
+    return request('/api/auth/login', { method: 'POST', body: { email, password } });
   }
   return {
     request,
-    login: (email, password = PASSWORD) => request('/api/auth/login', { method: 'POST', body: { email, password } }),
+    login,
   };
 }
 
@@ -133,10 +144,44 @@ export const buy = (client, eventId, ticketTypeId, quantity = 1, extra = {}) =>
     },
   });
 
+export function orderByToken(token) {
+  return get(
+    `SELECT o.* FROM orders o JOIN order_access_tokens oat ON oat.order_id = o.id
+     WHERE oat.token_hash = ?`,
+    crypto.createHash('sha256').update(token).digest('hex'),
+  );
+}
+
+export const accessOrder = (client, token) => client.request('/api/orders/access', { method: 'POST', body: { token } });
+
+export async function getOrder(client, token) {
+  return accessOrder(client, token);
+}
+
 export async function payByCard(client, token, duplicateNotification = true) {
-  const { body } = await client.request(`/api/orders/${token}/checkout`, { method: 'POST' });
+  await accessOrder(client, token);
+  const { body } = await client.request('/api/orders/checkout', { method: 'POST' });
   const sessionId = body.redirectUrl.split('/').pop();
   return client.request(`/api/mock-provider/sessions/${sessionId}/pay`, { method: 'POST', body: { duplicateNotification } });
+}
+
+export function tokenFromLatestOrderEmail(email) {
+  const messages = all(`SELECT html FROM emails WHERE (? IS NULL OR to_email = ?) ORDER BY id DESC LIMIT 20`, email ?? null, email ?? null);
+  const token = messages.map((message) => decryptData(message.html).match(/\/commande\/([A-Za-z0-9_-]{16,64})/)?.[1]).find(Boolean);
+  if (!token) throw new Error('Lien de commande absent de la boîte de test.');
+  return token;
+}
+
+export async function cancelOrder(client, token) {
+  const access = await accessOrder(client, token);
+  if (access.body?.status === 'paid') {
+    await client.request('/api/orders/cancel-code', { method: 'POST' });
+    const email = get("SELECT html FROM emails WHERE kind = 'cancellation_code' ORDER BY id DESC LIMIT 1");
+    const confirmationCode = email ? decryptData(email.html).match(/\b(\d{6})\b/)?.[1] : null;
+    if (!confirmationCode) throw new Error("Code d'annulation absent de la boîte de test.");
+    return client.request('/api/orders/cancel', { method: 'POST', body: { confirmationCode } });
+  }
+  return client.request('/api/orders/cancel', { method: 'POST' });
 }
 
 export const stock = (id) => ({ ...get('SELECT quota, sold, held FROM ticket_types WHERE id = ?', id) });
